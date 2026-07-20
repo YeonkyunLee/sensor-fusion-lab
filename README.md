@@ -41,7 +41,7 @@ The canonical result: **fusion beats every single sensor**, and coasts through
 the position outage on the IMU (dead-reckoning) while IMU-alone drifts
 catastrophically from double integration.
 
-![fusion](outputs/02_imu_fusion.png)
+![fusion](assets/02_imu_fusion.png)
 
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
@@ -75,4 +75,5 @@ tests/
 - [ ] IMU bias/scale online estimation
 - [ ] ROS2 node wrapping the filter
 
-MIT-style personal learning project. Synthetic data only.
+## License
+MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
