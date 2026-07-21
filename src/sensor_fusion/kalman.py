@@ -24,6 +24,7 @@ class KalmanFilter:
         R: np.ndarray,
         x0: np.ndarray,
         P0: np.ndarray,
+        B: np.ndarray | None = None,
     ):
         self.F = np.asarray(F, float)
         self.H = np.asarray(H, float)
@@ -31,10 +32,13 @@ class KalmanFilter:
         self.R = np.asarray(R, float)
         self.x = np.asarray(x0, float).reshape(-1)
         self.P = np.asarray(P0, float)
+        self.B = None if B is None else np.asarray(B, float)  # 제어입력 행렬(선택)
         self._I = np.eye(self.P.shape[0])
 
-    def predict(self) -> None:
+    def predict(self, u: np.ndarray | None = None) -> None:
         self.x = self.F @ self.x
+        if u is not None and self.B is not None:
+            self.x = self.x + self.B @ np.asarray(u, float).reshape(-1)
         self.P = self.F @ self.P @ self.F.T + self.Q
 
     def update(
@@ -52,9 +56,9 @@ class KalmanFilter:
         A = self._I - K @ H
         self.P = A @ self.P @ A.T + K @ R @ K.T
 
-    def step(self, z: np.ndarray | None) -> np.ndarray:
-        """predict 후, 측정이 있으면 update. 추정 상태를 반환."""
-        self.predict()
+    def step(self, z: np.ndarray | None, u: np.ndarray | None = None) -> np.ndarray:
+        """predict(제어입력 u 선택) 후, 측정이 있으면 update. 추정 상태를 반환."""
+        self.predict(u)
         if z is not None:
             self.update(z)
         return self.x.copy()

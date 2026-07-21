@@ -63,6 +63,25 @@ motion via a hand-derived Jacobian; UKF propagates sigma points.
 
 ![ctrv](assets/03_ctrv_ekf_ukf.png)
 
+### 4. Online IMU bias estimation (`scripts/04_imu_bias.py`)
+An accelerometer has a slowly-varying bias; unestimated, it double-integrates into
+position drift. Augment the state with the bias ([p, v, **b**]) and estimate it online
+from position fixes. Tested with a GPS-like outage (k=120–200).
+
+| filter | RMSE (all) | RMSE (during outage) |
+|--------|-----------:|---------------------:|
+| no-bias ([p, v]) | 4.78 m | 9.12 m |
+| **bias-augmented ([p, v, b])** | **3.52 m** | **6.65 m** |
+
+- Estimating the bias cuts dead-reckoning drift during the outage by ~27%.
+- **Observability made visible:** the bias estimate converges while position fixes
+  arrive but **freezes during the outage** (no measurement → bias unobservable) — then
+  resumes. Exactly the right behavior.
+- Honest limit: on a maneuvering target, bias is partly confounded with true
+  acceleration, so convergence is good but not exact.
+
+![imu bias](assets/04_imu_bias.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -77,6 +96,7 @@ pip install numpy matplotlib pytest
 python scripts/01_tracking.py       # linear KF tracking
 python scripts/02_imu_fusion.py     # position + IMU fusion with outage
 python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF
+python scripts/04_imu_bias.py       # online IMU bias estimation
 pytest -q
 ```
 
@@ -91,13 +111,14 @@ scripts/
   01_tracking.py      CV tracking vs raw / moving average
   02_imu_fusion.py    position + IMU fusion with outage
   03_ctrv_ekf_ukf.py  nonlinear turning-target tracking, EKF vs UKF
+  04_imu_bias.py      online IMU bias estimation (state augmentation)
 tests/
 ```
 
 ## Roadmap
 - [x] Linear KF, CV tracking, position+IMU fusion, outage robustness
 - [x] EKF + UKF for nonlinear models (CTRV turning target)
-- [ ] IMU bias/scale online estimation
+- [x] Online IMU bias estimation via state augmentation
 - [ ] ROS2 node wrapping the filter
 
 ## License
