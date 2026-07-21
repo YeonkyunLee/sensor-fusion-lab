@@ -82,6 +82,27 @@ from position fixes. Tested with a GPS-like outage (k=120–200).
 
 ![imu bias](assets/04_imu_bias.png)
 
+### 5. EKF-SLAM: localization + mapping at once (`scripts/05_ekf_slam.py`)
+The robot drives with noisy odometry and observes landmarks by range-bearing. The state
+grows to hold the **robot pose + every landmark** ([x,y,θ, l₁ₓ,l₁ᵧ, …]); each observation
+updates pose and map together. A compass aids heading (as real robots fuse a
+magnetometer).
+
+| | RMSE |
+|--|-----:|
+| odometry only | 3.31 m |
+| **EKF-SLAM trajectory** | **0.19 m** |
+| **EKF-SLAM map (landmarks)** | **0.11 m** |
+
+- SLAM localizes **17× better than dead-reckoning** and recovers the map to ~0.1 m.
+- Getting this stable took real debugging — documented honestly in the code comments:
+  proper landmark initialization (inverse-observation covariance), **heading
+  observability** (a single self-initialized landmark can't correct the pose that
+  placed it → needs a heading source), **±π wrap** handling, and innovation gating for
+  numerical robustness.
+
+![ekf-slam](assets/05_ekf_slam.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -97,6 +118,7 @@ python scripts/01_tracking.py       # linear KF tracking
 python scripts/02_imu_fusion.py     # position + IMU fusion with outage
 python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF
 python scripts/04_imu_bias.py       # online IMU bias estimation
+python scripts/05_ekf_slam.py       # EKF-SLAM: localization + mapping
 pytest -q
 ```
 
@@ -112,6 +134,7 @@ scripts/
   02_imu_fusion.py    position + IMU fusion with outage
   03_ctrv_ekf_ukf.py  nonlinear turning-target tracking, EKF vs UKF
   04_imu_bias.py      online IMU bias estimation (state augmentation)
+  05_ekf_slam.py      EKF-SLAM: joint localization + landmark mapping
 tests/
 ```
 
@@ -119,6 +142,8 @@ tests/
 - [x] Linear KF, CV tracking, position+IMU fusion, outage robustness
 - [x] EKF + UKF for nonlinear models (CTRV turning target)
 - [x] Online IMU bias estimation via state augmentation
+- [x] EKF-SLAM (joint localization + landmark mapping, compass-aided)
+- [ ] Loop-closure scenario / larger maps
 - [ ] ROS2 node wrapping the filter
 
 ## License
