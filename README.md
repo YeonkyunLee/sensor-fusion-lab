@@ -43,18 +43,40 @@ catastrophically from double integration.
 
 ![fusion](assets/02_imu_fusion.png)
 
+### 3. Nonlinear tracking (CTRV): EKF vs UKF (`scripts/03_ctrv_ekf_ukf.py`)
+A target moving with **constant turn rate & velocity** (sin/cos of heading → nonlinear
+motion). A linear constant-velocity KF structurally lags on turns; EKF linearizes the
+motion via a hand-derived Jacobian; UKF propagates sigma points.
+
+| method | RMSE (all) | RMSE (turning) |
+|--------|-----------:|---------------:|
+| raw measurement | 2.59 m | — |
+| linear CV-KF | 1.60 m | 1.76 m |
+| **EKF (CTRV)** | **1.39 m** | **1.38 m** |
+| UKF (CTRV) | 1.42 m | 1.40 m |
+
+- The **nonlinear motion model (CTRV) beats linear CV-KF by ~22% on turns** — the model
+  matters more than the filter flavor here.
+- **EKF ≈ UKF** at this noise level: honest result. UKF's real edge is *practical* — it
+  needs no hand-derived Jacobian (I derived the full CTRV Jacobian for the EKF), and it
+  degrades more gracefully as nonlinearity/uncertainty grow.
+
+![ctrv](assets/03_ctrv_ekf_ukf.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
 - **Embedded → real-time**: the filter is a handful of small matrix ops per step,
   trivially real-time on an MCU.
-- Next: nonlinear (EKF/UKF), IMU bias estimation, then ROS2 integration.
+- **DSP → nonlinear estimation**: EKF (linearize) and UKF (sigma points) extend the same
+  machinery to nonlinear robot models — the bridge to real robotics state estimation.
 
 ## Quickstart
 ```bash
 pip install numpy matplotlib pytest
-python scripts/01_tracking.py
-python scripts/02_imu_fusion.py
+python scripts/01_tracking.py       # linear KF tracking
+python scripts/02_imu_fusion.py     # position + IMU fusion with outage
+python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF
 pytest -q
 ```
 
@@ -62,16 +84,19 @@ pytest -q
 ```
 src/sensor_fusion/
   kalman.py   generic linear Kalman filter (multi-sensor update)
+  ekf.py      extended KF (Jacobian linearization)
+  ukf.py      unscented KF (scaled sigma points, angle-aware hooks)
   sim.py      2D trajectory + noisy position/IMU sensors
 scripts/
-  01_tracking.py     CV tracking vs raw / moving average
-  02_imu_fusion.py   position + IMU fusion with outage
+  01_tracking.py      CV tracking vs raw / moving average
+  02_imu_fusion.py    position + IMU fusion with outage
+  03_ctrv_ekf_ukf.py  nonlinear turning-target tracking, EKF vs UKF
 tests/
 ```
 
 ## Roadmap
 - [x] Linear KF, CV tracking, position+IMU fusion, outage robustness
-- [ ] EKF/UKF for nonlinear models (bearing-only, range-bearing)
+- [x] EKF + UKF for nonlinear models (CTRV turning target)
 - [ ] IMU bias/scale online estimation
 - [ ] ROS2 node wrapping the filter
 
