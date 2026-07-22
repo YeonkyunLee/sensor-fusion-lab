@@ -9,6 +9,9 @@ where it wins — and where it doesn't.
 
 🇰🇷 아래 한국어 병기.
 
+📓 **Write-ups:** a 3-part blog series (incl. an honest EKF-SLAM debugging journey) —
+see [blog/00_index.md](blog/00_index.md).
+
 ## Experiments
 
 ### 1. Tracking a maneuvering target (`scripts/01_tracking.py`)

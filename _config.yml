@@ -1,0 +1,4 @@
+title: sensor-fusion-lab
+description: Kalman / EKF / UKF / EKF-SLAM state estimation for robotics, from a DSP angle.
+theme: jekyll-theme-cayman
+show_downloads: false
