@@ -106,6 +106,27 @@ magnetometer).
 
 ![ekf-slam](assets/05_ekf_slam.png)
 
+### 6. Loop closure (`scripts/06_loop_closure.py`)
+The robot drives a full loop on odometry (heading drifts, no compass here) and returns to
+the start. Re-observing the **anchor landmarks** seen first (when the pose was certain)
+produces a large, legitimate innovation — a *loop-closure* update — that propagates back
+through the covariance and tightens the map. Compared with a run that ignores the revisit:
+
+| | return-phase RMSE |
+|--|------------------:|
+| no loop closure | 4.80 m |
+| **with loop closure** | **3.32 m** |
+
+![loop closure](assets/06_loop_closure.png)
+
+- Closure cuts return-phase drift ~**1.4×** and visibly re-aligns the map (right panel:
+  estimated landmarks snap onto the true ones).
+- Loop-closure observations are **exempted from the innovation gate** — a closure is a
+  large innovation *by design*, so gating it as an outlier would defeat the purpose.
+- **Honest limit:** a filter (EKF) can't re-linearize the whole past trajectory the way
+  graph-based SLAM (pose-graph optimization) does, so the correction is partial. That
+  gap is exactly why modern SLAM is graph-based — a natural next study.
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -122,6 +143,7 @@ python scripts/02_imu_fusion.py     # position + IMU fusion with outage
 python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF
 python scripts/04_imu_bias.py       # online IMU bias estimation
 python scripts/05_ekf_slam.py       # EKF-SLAM: localization + mapping
+python scripts/06_loop_closure.py   # loop closure corrects accumulated drift
 pytest -q
 ```
 
@@ -138,6 +160,7 @@ scripts/
   03_ctrv_ekf_ukf.py  nonlinear turning-target tracking, EKF vs UKF
   04_imu_bias.py      online IMU bias estimation (state augmentation)
   05_ekf_slam.py      EKF-SLAM: joint localization + landmark mapping
+  06_loop_closure.py  loop closure: revisiting the start corrects drift
 tests/
 ```
 
@@ -146,7 +169,8 @@ tests/
 - [x] EKF + UKF for nonlinear models (CTRV turning target)
 - [x] Online IMU bias estimation via state augmentation
 - [x] EKF-SLAM (joint localization + landmark mapping, compass-aided)
-- [ ] Loop-closure scenario / larger maps
+- [x] Loop closure (revisit anchors corrects drift; gate-exempt closure updates)
+- [ ] Graph-based SLAM (pose-graph optimization) for full trajectory correction
 - [ ] ROS2 node wrapping the filter
 
 ## License
