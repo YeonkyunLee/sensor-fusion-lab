@@ -127,6 +127,27 @@ through the covariance and tightens the map. Compared with a run that ignores th
   graph-based SLAM (pose-graph optimization) does, so the correction is partial. That
   gap is exactly why modern SLAM is graph-based — a natural next study.
 
+### 7. Graph SLAM — pose-graph optimization (`scripts/07_pose_graph_slam.py`)
+The fix for EKF-SLAM's partial correction: model the trajectory as a **graph** (nodes =
+poses, edges = odometry + loop-closure constraints) and optimize all poses jointly with
+Gauss-Newton. Unlike a filter, it **re-linearizes the entire past**, so one loop-closure
+edge corrects the whole trajectory.
+
+| | trajectory RMSE | end gap |
+|--|----------------:|--------:|
+| odometry only (open loop) | 4.81 m | 7.57 m |
+| **pose-graph optimized** | **0.99 m** | **0.29 m** |
+
+- A single loop-closure edge **snaps the whole loop shut** — 5× error reduction (vs
+  EKF-SLAM's 1.4× partial closure). χ² 21271 → 5.9 in 4 iterations.
+- SE(2) error/Jacobians derived from scratch (`src/sensor_fusion/posegraph.py`); pose 0
+  anchored as the gauge.
+
+![graph slam](assets/07_pose_graph_slam.png)
+
+This is why modern SLAM is graph-based. The lab now spans the arc: linear KF → EKF/UKF →
+IMU bias → EKF-SLAM → EKF loop closure (partial) → **graph SLAM (full)**.
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -144,6 +165,7 @@ python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF
 python scripts/04_imu_bias.py       # online IMU bias estimation
 python scripts/05_ekf_slam.py       # EKF-SLAM: localization + mapping
 python scripts/06_loop_closure.py   # loop closure corrects accumulated drift
+python scripts/07_pose_graph_slam.py # graph SLAM: pose-graph optimization
 pytest -q
 ```
 
@@ -161,6 +183,8 @@ scripts/
   04_imu_bias.py      online IMU bias estimation (state augmentation)
   05_ekf_slam.py      EKF-SLAM: joint localization + landmark mapping
   06_loop_closure.py  loop closure: revisiting the start corrects drift
+  07_pose_graph_slam.py  graph SLAM: pose-graph (Gauss-Newton) optimization
+src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
 
@@ -170,7 +194,8 @@ tests/
 - [x] Online IMU bias estimation via state augmentation
 - [x] EKF-SLAM (joint localization + landmark mapping, compass-aided)
 - [x] Loop closure (revisit anchors corrects drift; gate-exempt closure updates)
-- [ ] Graph-based SLAM (pose-graph optimization) for full trajectory correction
+- [x] Graph-based SLAM (pose-graph optimization) — full-trajectory loop closure
+- [ ] Landmarks in the graph (bundle-adjustment style) / robust kernels
 - [ ] ROS2 node wrapping the filter
 
 ## License
