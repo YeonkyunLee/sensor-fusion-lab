@@ -276,6 +276,25 @@ solver) — the datasets every SLAM paper reports on.
 > Datasets aren't committed (redistribution). Fetch, e.g., the Intel/parking-garage `.g2o`
 > from public SLAM dataset repos into `data_cache/`, then run the script.
 
+### 15. Robust SLAM on a real benchmark (`scripts/15_robust_g2o.py`)
+Combining #11 (robustness) and #14 (real data): inject **30 false loop closures** into the
+real Intel g2o and compare robust kernels. Odometry edges stay full-weight (the backbone);
+loop-closure edges are robustified.
+
+| kernel | inlier χ² (lower = cleaner map) |
+|--------|--------------------------------:|
+| none (naive) | 23,220 |
+| Huber | 9,836 |
+| **DCS (Dynamic Covariance Scaling)** | **216** |
+
+- **DCS fully rejects the outliers** — recovering the clean Intel corridor map (216 ≈ the
+  uncorrupted optimum). Huber only partially helps; naive is wrecked.
+- Key practical detail: apply the robust kernel **only to loop-closure edges**, not the
+  odometry backbone — otherwise large initial residuals downweight everything and the
+  optimizer stalls.
+
+![robust g2o](assets/15_robust_g2o.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -301,6 +320,7 @@ python scripts/11_robust_slam.py     # robust SLAM: reject false loop closures
 python scripts/12_graph_slam_landmarks.py  # full graph SLAM (joint pose+landmark BA)
 python scripts/13_pose_graph_3d.py   # 3D SE(3) pose-graph SLAM
 python scripts/14_g2o_benchmark.py --file data_cache/intel.g2o   # real g2o benchmark
+python scripts/15_robust_g2o.py      # robust SLAM on real Intel + false loop closures
 pytest -q
 ```
 
@@ -326,6 +346,7 @@ scripts/
   12_graph_slam_landmarks.py  full graph SLAM: joint pose+landmark optimization (2D BA)
   13_pose_graph_3d.py    3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
   14_g2o_benchmark.py    standard g2o benchmark loader + sparse optimizer (2D/3D)
+  15_robust_g2o.py       robust kernels (Huber/DCS) on real Intel + false loop closures
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -345,7 +366,8 @@ tests/
 - [x] Full graph SLAM: landmarks in the graph, joint pose+landmark BA
 - [x] 3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
 - [x] Validated on standard g2o benchmarks (Intel 2D, parking-garage 3D)
-- [ ] Robust kernels beyond Huber (DCS / switchable constraints); real-dataset (KITTI/g2o) ingest
+- [x] Robust kernels (Huber, DCS) on real g2o benchmark with injected outliers
+- [ ] Incremental/online SLAM (iSAM-style); learned front-end (ML+estimation)
 - [ ] ROS2 node wrapping the filter
 
 ## License

@@ -94,3 +94,14 @@ def test_g2o_intel_benchmark_if_present():
     c0 = mod.chi2_se2(X0, E)
     _, hist = mod.optimize_se2_sparse(X0.copy(), E, iters=15)
     assert hist[-1] < c0 * 0.01   # chi2 99%+ 감소
+
+
+def test_robust_g2o_dcs_beats_naive_if_present():
+    import pytest
+    if not (ROOT / "data_cache" / "intel.g2o").exists():
+        pytest.skip("intel.g2o 없음")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    spec = importlib.util.spec_from_file_location("rg15", ROOT / "scripts" / "15_robust_g2o.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    none_c, huber_c, dcs_c = mod.main()
+    assert dcs_c < none_c * 0.1   # DCS가 거짓 루프클로저를 훨씬 잘 걸러냄
