@@ -28,3 +28,13 @@ def test_uncertainty_aware_prevents_violations():
     naive_viol, aware_viol = mod.main()
     assert aware_viol < 0.05           # 불확실도-인지: 침범 거의 0
     assert naive_viol > aware_viol     # naive보다 안전
+
+
+def test_learned_imu_frontend_beats_raw():
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        import pytest; pytest.skip("torch 없음")
+    mod = _load("16_learned_imu_frontend.py")
+    raw, lp, ml = mod.main()
+    assert ml < raw   # 학습 프론트엔드가 raw 적분보다 드리프트 작음

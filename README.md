@@ -295,6 +295,27 @@ loop-closure edges are robustified.
 
 ![robust g2o](assets/15_robust_g2o.png)
 
+### 16. Learned IMU front-end (ML + estimation) (`scripts/16_learned_imu_frontend.py`)
+The 2026 direction is *learning + estimation*. A small **1D-CNN denoiser** cleans raw IMU
+before dead-reckoning — the denoising technique from
+[signal-ml-lab](https://github.com/YeonkyunLee/signal-ml-lab) entering the robot estimation
+pipeline. Noise is realistic: white + random-walk bias + non-Gaussian **spikes**.
+
+| accel front-end | dead-reckon position RMSE |
+|-----------------|--------------------------:|
+| raw IMU | 9.66 m |
+| classical low-pass | 6.65 m |
+| **learned 1D-CNN** | **6.28 m** |
+
+- The learned front-end removes spikes and white noise cleanly (see signal panel) and
+  beats raw **1.5×**, edging classical low-pass. Requires `torch` (optional dep).
+- **Honest limit:** the residual drift is the *integrated random-walk bias* — low-frequency
+  and unremovable by any front-end. That's precisely why IMU dead-reckoning needs
+  **fusion / SLAM** (experiments 2, 4, 8, 10) — the front-end helps at the margin; the
+  architecture is what closes the loop.
+
+![learned imu](assets/16_learned_imu_frontend.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -321,6 +342,7 @@ python scripts/12_graph_slam_landmarks.py  # full graph SLAM (joint pose+landmar
 python scripts/13_pose_graph_3d.py   # 3D SE(3) pose-graph SLAM
 python scripts/14_g2o_benchmark.py --file data_cache/intel.g2o   # real g2o benchmark
 python scripts/15_robust_g2o.py      # robust SLAM on real Intel + false loop closures
+python scripts/16_learned_imu_frontend.py  # learned IMU denoiser (torch, optional)
 pytest -q
 ```
 
@@ -347,6 +369,7 @@ scripts/
   13_pose_graph_3d.py    3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
   14_g2o_benchmark.py    standard g2o benchmark loader + sparse optimizer (2D/3D)
   15_robust_g2o.py       robust kernels (Huber/DCS) on real Intel + false loop closures
+  16_learned_imu_frontend.py  learned 1D-CNN IMU denoiser front-end (ML+estimation)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -367,7 +390,8 @@ tests/
 - [x] 3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
 - [x] Validated on standard g2o benchmarks (Intel 2D, parking-garage 3D)
 - [x] Robust kernels (Huber, DCS) on real g2o benchmark with injected outliers
-- [ ] Incremental/online SLAM (iSAM-style); learned front-end (ML+estimation)
+- [x] Learned IMU front-end (1D-CNN denoiser feeding dead-reckoning)
+- [ ] Incremental/online SLAM (iSAM-style)
 - [ ] ROS2 node wrapping the filter
 
 ## License
