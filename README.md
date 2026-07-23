@@ -183,6 +183,26 @@ covariance grows). Two stop rules, 300-trial Monte-Carlo:
 
 ![safe autonomy](assets/09_safe_autonomy.png)
 
+### 10. Modern SLAM — VIO front-end + factor-graph back-end (`scripts/10_vio_graph_slam.py`)
+The real architecture of production SLAM, combining experiments 7–8: a **VIO front-end**
+produces keyframe-to-keyframe odometry (drifts), and a **factor-graph back-end** fuses it
+with loop-closure factors from place recognition. The robot drives **two laps**; the
+second lap revisits the first → 42 loop-closure factors.
+
+| | trajectory RMSE |
+|--|----------------:|
+| VIO front-end only (2-lap drift) | 16.33 m |
+| **+ factor-graph back-end** | **0.68 m** |
+
+- The back-end cuts drift **24×** (χ² 1.1M → 135 in 6 iterations). The drifting 2-lap
+  spiral collapses onto a single clean circle once loop closures constrain it.
+- This is the front-end/back-end split every modern SLAM system (ORB-SLAM, VINS) uses.
+
+![vio graph slam](assets/10_vio_graph_slam.png)
+
+The lab now covers the full modern stack: **KF → EKF/UKF → IMU bias → EKF-SLAM →
+loop closure → graph SLAM → VIO → VIO+graph → safe autonomy.**
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -203,6 +223,7 @@ python scripts/06_loop_closure.py   # loop closure corrects accumulated drift
 python scripts/07_pose_graph_slam.py # graph SLAM: pose-graph optimization
 python scripts/08_vio.py             # visual-inertial odometry
 python scripts/09_safe_autonomy.py   # uncertainty-aware safe-stop (No-Fly-Zone)
+python scripts/10_vio_graph_slam.py  # modern SLAM: VIO front-end + graph back-end
 pytest -q
 ```
 
@@ -223,6 +244,7 @@ scripts/
   07_pose_graph_slam.py  graph SLAM: pose-graph (Gauss-Newton) optimization
   08_vio.py           visual-inertial odometry (IMU + monocular bearing)
   09_safe_autonomy.py    uncertainty-aware safe-stop (surgical No-Fly-Zone analog)
+  10_vio_graph_slam.py   modern SLAM: VIO front-end + factor-graph back-end
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -236,6 +258,7 @@ tests/
 - [x] Graph-based SLAM (pose-graph optimization) — full-trajectory loop closure
 - [x] Visual-inertial odometry (IMU + monocular bearing fusion)
 - [x] Uncertainty-aware safe autonomy (surgical No-Fly-Zone analog)
+- [x] Modern SLAM stack: VIO front-end + factor-graph back-end (24x drift reduction)
 - [ ] Landmarks in the graph (bundle-adjustment style) / robust kernels
 - [ ] ROS2 node wrapping the filter
 
