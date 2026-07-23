@@ -81,3 +81,16 @@ def test_pose_graph_3d_reduces_error():
     spec.loader.exec_module(mod)
     odo, opt = mod.main()
     assert opt < odo * 0.6
+
+
+def test_g2o_intel_benchmark_if_present():
+    import pytest
+    f = ROOT / "data_cache" / "intel.g2o"
+    if not f.exists():
+        pytest.skip("intel.g2o 없음 (표준 g2o 벤치마크 다운로드 필요)")
+    spec = importlib.util.spec_from_file_location("g2o14", ROOT / "scripts" / "14_g2o_benchmark.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    X0, E = mod.load_g2o_se2(str(f))
+    c0 = mod.chi2_se2(X0, E)
+    _, hist = mod.optimize_se2_sparse(X0.copy(), E, iters=15)
+    assert hist[-1] < c0 * 0.01   # chi2 99%+ 감소

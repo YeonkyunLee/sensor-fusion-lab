@@ -3,3 +3,6 @@ __pycache__/
 outputs/
 .venv/
 .ipynb_checkpoints/
+data_cache/
+*.g2o
+outputs/*.pt

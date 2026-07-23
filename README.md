@@ -256,6 +256,26 @@ to 1e-15). A tilted circle is driven twice; the second lap revisits the first �
 
 ![3d slam](assets/13_pose_graph_3d.png)
 
+### 14. Standard g2o benchmarks — validation on real datasets (`scripts/14_g2o_benchmark.py`)
+Everything above is synthetic. Here the from-scratch optimizers are run on the **community
+standard `.g2o` pose-graph benchmarks** (parsed, solved with a sparse `scipy` normal-equation
+solver) — the datasets every SLAM paper reports on.
+
+| dataset | poses / edges | χ² before → after |
+|---------|--------------:|:------------------|
+| **Intel** (2D SE(2)) | 1228 / 1483 | 5,149,721 → **216** |
+| **parking-garage** (3D SE(3)) | 1661 / 6275 | 16,727 → **1.3** |
+
+- Both converge in ≤10 iterations to the recognizable canonical maps (Intel's corridors;
+  the multi-level parking garage). *Not synthetic circles — the actual benchmarks.*
+- Confirms the SE(2)/SE(3) error, Jacobians, and Gauss-Newton back-ends are correct at scale.
+
+![g2o intel](assets/14_g2o_intel.png)
+![g2o parking](assets/14_g2o_parking-garage.png)
+
+> Datasets aren't committed (redistribution). Fetch, e.g., the Intel/parking-garage `.g2o`
+> from public SLAM dataset repos into `data_cache/`, then run the script.
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -280,6 +300,7 @@ python scripts/10_vio_graph_slam.py  # modern SLAM: VIO front-end + graph back-e
 python scripts/11_robust_slam.py     # robust SLAM: reject false loop closures
 python scripts/12_graph_slam_landmarks.py  # full graph SLAM (joint pose+landmark BA)
 python scripts/13_pose_graph_3d.py   # 3D SE(3) pose-graph SLAM
+python scripts/14_g2o_benchmark.py --file data_cache/intel.g2o   # real g2o benchmark
 pytest -q
 ```
 
@@ -304,6 +325,7 @@ scripts/
   11_robust_slam.py      robust back-end: Huber kernel rejects false loop closures
   12_graph_slam_landmarks.py  full graph SLAM: joint pose+landmark optimization (2D BA)
   13_pose_graph_3d.py    3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
+  14_g2o_benchmark.py    standard g2o benchmark loader + sparse optimizer (2D/3D)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -322,6 +344,7 @@ tests/
 - [x] Robust back-end (Huber kernel) rejecting false loop closures
 - [x] Full graph SLAM: landmarks in the graph, joint pose+landmark BA
 - [x] 3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
+- [x] Validated on standard g2o benchmarks (Intel 2D, parking-garage 3D)
 - [ ] Robust kernels beyond Huber (DCS / switchable constraints); real-dataset (KITTI/g2o) ingest
 - [ ] ROS2 node wrapping the filter
 
