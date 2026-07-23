@@ -221,6 +221,24 @@ graph re-optimized.
 
 ![robust slam](assets/11_robust_slam.png)
 
+### 12. Full graph SLAM — joint pose + landmark optimization (`scripts/12_graph_slam_landmarks.py`)
+The capstone: put **landmarks in the graph too**. Poses (SE(2)) and landmark points are
+both nodes; odometry factors (pose–pose) and range-bearing factors (pose–landmark) are
+optimized *jointly* with Gauss-Newton — the batch (bundle-adjustment) counterpart of the
+sequential EKF-SLAM in experiment 5.
+
+| | pose RMSE | map RMSE |
+|--|----------:|---------:|
+| odometry init | 7.29 m | 6.46 m |
+| **joint BA (210 poses + 10 landmarks)** | **0.30 m** | **0.33 m** |
+
+- Jointly optimizing 209 odometry + 622 observation factors: **pose 24×, map 20×**
+  better (χ² 280k → 1.2k in 6 iterations). The drifted spiral and scattered landmarks
+  snap onto the true circle and true landmark positions.
+- Range-bearing factor Jacobians (∂/∂pose, ∂/∂landmark) derived from scratch.
+
+![graph slam landmarks](assets/12_graph_slam_landmarks.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -243,6 +261,7 @@ python scripts/08_vio.py             # visual-inertial odometry
 python scripts/09_safe_autonomy.py   # uncertainty-aware safe-stop (No-Fly-Zone)
 python scripts/10_vio_graph_slam.py  # modern SLAM: VIO front-end + graph back-end
 python scripts/11_robust_slam.py     # robust SLAM: reject false loop closures
+python scripts/12_graph_slam_landmarks.py  # full graph SLAM (joint pose+landmark BA)
 pytest -q
 ```
 
@@ -265,6 +284,7 @@ scripts/
   09_safe_autonomy.py    uncertainty-aware safe-stop (surgical No-Fly-Zone analog)
   10_vio_graph_slam.py   modern SLAM: VIO front-end + factor-graph back-end
   11_robust_slam.py      robust back-end: Huber kernel rejects false loop closures
+  12_graph_slam_landmarks.py  full graph SLAM: joint pose+landmark optimization (2D BA)
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -280,7 +300,8 @@ tests/
 - [x] Uncertainty-aware safe autonomy (surgical No-Fly-Zone analog)
 - [x] Modern SLAM stack: VIO front-end + factor-graph back-end (24x drift reduction)
 - [x] Robust back-end (Huber kernel) rejecting false loop closures
-- [ ] Landmarks in the graph (bundle-adjustment style)
+- [x] Full graph SLAM: landmarks in the graph, joint pose+landmark BA
+- [ ] Robust kernels beyond Huber (DCS / switchable constraints)
 - [ ] ROS2 node wrapping the filter
 
 ## License

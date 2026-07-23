@@ -46,6 +46,15 @@ def test_robust_rejects_false_loop_closures():
     assert robust_rmse < naive_rmse * 0.6
 
 
+def test_full_graph_slam_joint_optimization():
+    spec = importlib.util.spec_from_file_location("gsl12", ROOT / "scripts" / "12_graph_slam_landmarks.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    pose_odo, pose_opt, map_opt = mod.main()
+    assert pose_opt < pose_odo * 0.25   # 공동 최적화가 pose를 크게 개선
+    assert map_opt < 1.0                 # 지도도 정밀 복원
+
+
 def test_optimize_perfect_when_consistent():
     # 무잡음 상대 측정이면 최적화 후 chi2가 ~0
     poses = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0], [2, 1, np.pi / 2]], float)
