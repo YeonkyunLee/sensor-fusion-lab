@@ -60,6 +60,43 @@ def _error_and_jacobians(xi, xj, z):
     return e, A, B
 
 
+def optimize_robust(x0: np.ndarray, edges: list[Edge], iters: int = 30,
+                    huber_delta: float = 2.5, tol: float = 1e-4):
+    """Huber 강건 커널 GN. 거짓 루프클로저(이상치) 엣지를 반복 재가중으로 걷어낸다.
+
+    각 엣지의 마할라노비스 잔차가 huber_delta를 넘으면 가중치를 delta/r로 낮춘다
+    (IRLS). 잘못된 제약이 최적화를 오염시키는 것을 막는다.
+    """
+    x = np.asarray(x0, float).copy()
+    n = x.shape[0]
+    N = 3 * n
+    weights_last = None
+    for _ in range(iters):
+        H = np.zeros((N, N)); b = np.zeros(N); ws = []
+        for e in edges:
+            err, A, B = _error_and_jacobians(x[e.i], x[e.j], e.z)
+            r2 = float(err @ e.omega @ err)      # 마할라노비스 제곱
+            r = np.sqrt(max(r2, 1e-12))
+            w = 1.0 if r <= huber_delta else huber_delta / r   # Huber 가중치
+            ws.append(w)
+            Om = w * e.omega
+            i, j = 3 * e.i, 3 * e.j
+            H[i:i+3, i:i+3] += A.T @ Om @ A
+            H[i:i+3, j:j+3] += A.T @ Om @ B
+            H[j:j+3, i:i+3] += B.T @ Om @ A
+            H[j:j+3, j:j+3] += B.T @ Om @ B
+            b[i:i+3] += A.T @ Om @ err
+            b[j:j+3] += B.T @ Om @ err
+        H[:3, :3] += np.eye(3) * 1e6
+        dx = np.linalg.solve(H, -b)
+        x += dx.reshape(n, 3)
+        x[:, 2] = np.array([wrap(a) for a in x[:, 2]])
+        weights_last = ws
+        if np.max(np.abs(dx)) < tol:
+            break
+    return x, weights_last
+
+
 def optimize(x0: np.ndarray, edges: list[Edge], iters: int = 20, tol: float = 1e-4):
     """pose 벡터 x0 (n,3)를 Gauss-Newton으로 최적화. pose 0을 앵커로 고정."""
     x = np.asarray(x0, float).copy()

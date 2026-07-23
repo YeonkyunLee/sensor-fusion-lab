@@ -37,6 +37,15 @@ def test_vio_graph_backend_corrects_drift():
     assert opt_rmse < vio_rmse * 0.2
 
 
+def test_robust_rejects_false_loop_closures():
+    spec = importlib.util.spec_from_file_location("rs11", ROOT / "scripts" / "11_robust_slam.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    naive_rmse, robust_rmse = mod.main()
+    # 강건 백엔드가 거짓 루프클로저 오염을 뚜렷이 줄여야 함
+    assert robust_rmse < naive_rmse * 0.6
+
+
 def test_optimize_perfect_when_consistent():
     # 무잡음 상대 측정이면 최적화 후 chi2가 ~0
     poses = np.array([[0, 0, 0], [1, 0, 0], [2, 0, 0], [2, 1, np.pi / 2]], float)

@@ -203,6 +203,24 @@ second lap revisits the first → 42 loop-closure factors.
 The lab now covers the full modern stack: **KF → EKF/UKF → IMU bias → EKF-SLAM →
 loop closure → graph SLAM → VIO → VIO+graph → safe autonomy.**
 
+### 11. Robust SLAM — rejecting false loop closures (`scripts/11_robust_slam.py`)
+Real place recognition sometimes matches the wrong place (perceptual aliasing). A single
+**false loop-closure** can wreck a least-squares map. Robust back-ends handle it — here a
+**Huber kernel** (IRLS) downweights outliers, then rejected edges are dropped and the
+graph re-optimized.
+
+| | trajectory RMSE |
+|--|----------------:|
+| naive least-squares (3 false closures injected) | 6.28 m |
+| **robust (Huber) + rejection** | **2.40 m** |
+
+- The 3 false loop closures get IRLS weights **0.02–0.05** (rejected); the true one keeps
+  weight **1.0**. Error cut **3×**; the distorted map re-forms into a clean circle.
+- Perceptual aliasing / outlier rejection is a top real-world SLAM failure mode — this is
+  what separates a demo from a deployable back-end.
+
+![robust slam](assets/11_robust_slam.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -224,6 +242,7 @@ python scripts/07_pose_graph_slam.py # graph SLAM: pose-graph optimization
 python scripts/08_vio.py             # visual-inertial odometry
 python scripts/09_safe_autonomy.py   # uncertainty-aware safe-stop (No-Fly-Zone)
 python scripts/10_vio_graph_slam.py  # modern SLAM: VIO front-end + graph back-end
+python scripts/11_robust_slam.py     # robust SLAM: reject false loop closures
 pytest -q
 ```
 
@@ -245,6 +264,7 @@ scripts/
   08_vio.py           visual-inertial odometry (IMU + monocular bearing)
   09_safe_autonomy.py    uncertainty-aware safe-stop (surgical No-Fly-Zone analog)
   10_vio_graph_slam.py   modern SLAM: VIO front-end + factor-graph back-end
+  11_robust_slam.py      robust back-end: Huber kernel rejects false loop closures
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -259,7 +279,8 @@ tests/
 - [x] Visual-inertial odometry (IMU + monocular bearing fusion)
 - [x] Uncertainty-aware safe autonomy (surgical No-Fly-Zone analog)
 - [x] Modern SLAM stack: VIO front-end + factor-graph back-end (24x drift reduction)
-- [ ] Landmarks in the graph (bundle-adjustment style) / robust kernels
+- [x] Robust back-end (Huber kernel) rejecting false loop closures
+- [ ] Landmarks in the graph (bundle-adjustment style)
 - [ ] ROS2 node wrapping the filter
 
 ## License
