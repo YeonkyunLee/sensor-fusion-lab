@@ -65,3 +65,19 @@ def test_optimize_perfect_when_consistent():
     x0 = poses + np.array([0, 0, 0])  # 정확한 초기값
     x, hist = optimize(x0.copy(), edges, iters=5)
     assert hist[-1] < 1e-6
+
+
+def test_se3_exp_log_roundtrip():
+    from sensor_fusion.se3 import se3_exp, se3_log
+    rng = np.random.default_rng(0)
+    for _ in range(50):
+        xi = np.concatenate([rng.normal(0, 2, 3), rng.normal(0, 0.5, 3)])
+        assert np.max(np.abs(se3_log(se3_exp(xi)) - xi)) < 1e-9
+
+
+def test_pose_graph_3d_reduces_error():
+    spec = importlib.util.spec_from_file_location("pg3d13", ROOT / "scripts" / "13_pose_graph_3d.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    odo, opt = mod.main()
+    assert opt < odo * 0.6

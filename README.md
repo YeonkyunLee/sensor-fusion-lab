@@ -239,6 +239,23 @@ sequential EKF-SLAM in experiment 5.
 
 ![graph slam landmarks](assets/12_graph_slam_landmarks.png)
 
+### 13. 3D SE(3) pose-graph SLAM (`scripts/13_pose_graph_3d.py`)
+Real robots and drones live in **3D**. Poses become SE(3) (rotation + translation); the
+optimizer works in the 6-DOF tangent space (se(3)) and retracts via the exp map. SO(3)/
+SE(3) exp·log built from scratch (`src/sensor_fusion/se3.py`, verified by log∘exp roundtrip
+to 1e-15). A tilted circle is driven twice; the second lap revisits the first → loop closures.
+
+| | 3D position RMSE |
+|--|-----------------:|
+| odometry only (2-lap drift) | 4.54 m |
+| **SE(3) pose-graph optimized** | **1.43 m** |
+
+- 23 loop-closure factors + Gauss-Newton on the manifold cut 3D drift **3×** (χ² 109k → 144).
+- Numerical Jacobians with right-perturbation on SE(3) — a robust way to prototype
+  manifold optimization without hand-deriving SO(3) Jacobians.
+
+![3d slam](assets/13_pose_graph_3d.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -262,6 +279,7 @@ python scripts/09_safe_autonomy.py   # uncertainty-aware safe-stop (No-Fly-Zone)
 python scripts/10_vio_graph_slam.py  # modern SLAM: VIO front-end + graph back-end
 python scripts/11_robust_slam.py     # robust SLAM: reject false loop closures
 python scripts/12_graph_slam_landmarks.py  # full graph SLAM (joint pose+landmark BA)
+python scripts/13_pose_graph_3d.py   # 3D SE(3) pose-graph SLAM
 pytest -q
 ```
 
@@ -285,6 +303,8 @@ scripts/
   10_vio_graph_slam.py   modern SLAM: VIO front-end + factor-graph back-end
   11_robust_slam.py      robust back-end: Huber kernel rejects false loop closures
   12_graph_slam_landmarks.py  full graph SLAM: joint pose+landmark optimization (2D BA)
+  13_pose_graph_3d.py    3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
+src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -301,7 +321,8 @@ tests/
 - [x] Modern SLAM stack: VIO front-end + factor-graph back-end (24x drift reduction)
 - [x] Robust back-end (Huber kernel) rejecting false loop closures
 - [x] Full graph SLAM: landmarks in the graph, joint pose+landmark BA
-- [ ] Robust kernels beyond Huber (DCS / switchable constraints)
+- [x] 3D SE(3) pose-graph SLAM (Lie-group manifold optimization)
+- [ ] Robust kernels beyond Huber (DCS / switchable constraints); real-dataset (KITTI/g2o) ingest
 - [ ] ROS2 node wrapping the filter
 
 ## License
