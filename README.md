@@ -9,7 +9,7 @@ where it wins — and where it doesn't.
 
 🇰🇷 아래 한국어 병기.
 
-📓 **Write-ups:** a 3-part blog series (incl. an honest EKF-SLAM debugging journey) —
+📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Experiments
@@ -148,6 +148,41 @@ edge corrects the whole trajectory.
 This is why modern SLAM is graph-based. The lab now spans the arc: linear KF → EKF/UKF →
 IMU bias → EKF-SLAM → EKF loop closure (partial) → **graph SLAM (full)**.
 
+### 8. Visual-Inertial Odometry (VIO) (`scripts/08_vio.py`)
+The workhorse of modern robot/AR localization, and a keyword on every state-estimation
+JD. A monocular camera gives only **bearing** to features (no range); the IMU gives
+high-rate motion but double-integrates into drift. An EKF fuses them tightly.
+
+| | position RMSE |
+|--|--------------:|
+| IMU only (dead-reckoning) | 3.45 m |
+| **VIO (IMU + monocular bearing)** | **1.05 m** |
+
+- Visual bearing updates cut IMU drift **3×**; the estimate stays locked to truth even
+  where features are sparse (see the divergence of IMU-only in the upper arc).
+
+![vio](assets/08_vio.png)
+
+### 9. Uncertainty-aware safe autonomy (`scripts/09_safe_autonomy.py`)
+The estimation counterpart of a surgical robot's **"No-Fly Zone"**: an autonomous system
+approaches a critical boundary while its sensors degrade (position sensor drops out →
+covariance grows). Two stop rules, 300-trial Monte-Carlo:
+
+| stop rule | no-fly-zone violation rate |
+|-----------|---------------------------:|
+| naive (trusts the estimate) | **60%** |
+| **uncertainty-aware (estimate + k·σ)** | **0%** |
+
+- The naive rule trusts a drifted estimate and crosses the safety line 60% of the time.
+- The uncertainty-aware gate **stops when it doesn't know** (widening covariance → larger
+  margin), preventing every violation — at the cost of stopping ~1.3 m earlier.
+- This is exactly the *Task-Autonomy-under-supervision* principle driving 2026 surgical
+  robotics (FDA PCCP, real-time "No-Fly Zones"): safe autonomy = estimation + a margin
+  that respects uncertainty. It reuses this repo's estimation core and the
+  [signal-ml-lab](https://github.com/YeonkyunLee/signal-ml-lab) uncertainty-gate theme.
+
+![safe autonomy](assets/09_safe_autonomy.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -166,6 +201,8 @@ python scripts/04_imu_bias.py       # online IMU bias estimation
 python scripts/05_ekf_slam.py       # EKF-SLAM: localization + mapping
 python scripts/06_loop_closure.py   # loop closure corrects accumulated drift
 python scripts/07_pose_graph_slam.py # graph SLAM: pose-graph optimization
+python scripts/08_vio.py             # visual-inertial odometry
+python scripts/09_safe_autonomy.py   # uncertainty-aware safe-stop (No-Fly-Zone)
 pytest -q
 ```
 
@@ -184,6 +221,8 @@ scripts/
   05_ekf_slam.py      EKF-SLAM: joint localization + landmark mapping
   06_loop_closure.py  loop closure: revisiting the start corrects drift
   07_pose_graph_slam.py  graph SLAM: pose-graph (Gauss-Newton) optimization
+  08_vio.py           visual-inertial odometry (IMU + monocular bearing)
+  09_safe_autonomy.py    uncertainty-aware safe-stop (surgical No-Fly-Zone analog)
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -195,6 +234,8 @@ tests/
 - [x] EKF-SLAM (joint localization + landmark mapping, compass-aided)
 - [x] Loop closure (revisit anchors corrects drift; gate-exempt closure updates)
 - [x] Graph-based SLAM (pose-graph optimization) — full-trajectory loop closure
+- [x] Visual-inertial odometry (IMU + monocular bearing fusion)
+- [x] Uncertainty-aware safe autonomy (surgical No-Fly-Zone analog)
 - [ ] Landmarks in the graph (bundle-adjustment style) / robust kernels
 - [ ] ROS2 node wrapping the filter
 

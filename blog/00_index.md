@@ -18,6 +18,9 @@ DSP 알고리즘 엔지니어가 **추정이론으로 로봇 상태추정에 발
 | [1](01_kalman_dsp_bridge.md) | 칼만 = 시변 적응 필터 + 다중센서 융합 | 위치+IMU 융합 1.23m(단일센서 압도), outage 관성주행 |
 | [2](02_ekf_ukf_bias.md) | 비선형(EKF/UKF) + IMU 바이어스 추정 | 비선형 모델 +22%; 바이어스 관측성 시각화 |
 | [3](03_ekf_slam_debugging.md) | EKF-SLAM 디버깅 여정 | 오도메트리 대비 17배; **8번의 실패와 그 원인** |
+| [4](04_safe_autonomy_medical.md) | 안전한 자율성 — 수술 No-Fly-Zone | 불확실도-인지 세이프스톱, 침범률 60%→0% |
+
+(그 외 저장소 실험: 그래프 SLAM(루프클로저 5×), VIO(IMU+시각 3×) — README 참고)
 
 ## 관통하는 원리
 
