@@ -1,0 +1,174 @@
+---
+layout: none
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive Pose-Graph SLAM — sensor-fusion-lab</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --true:#3fb950; --odo:#f85149; --opt:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+  header a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; flex-wrap:wrap; gap:18px; padding:18px 22px; }
+  .stage { flex:1 1 520px; min-width:320px; }
+  canvas { width:100%; background:#0a0e14; border:1px solid #30363d; border-radius:10px; display:block; }
+  .panel { flex:0 0 260px; background:var(--panel); border:1px solid #30363d; border-radius:10px; padding:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  button { width:100%; padding:10px; margin:6px 0; border:1px solid #30363d; border-radius:8px; background:#21262d; color:var(--fg); font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0d1117; font-weight:600; border-color:var(--accent); }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input[type=range] { width:100%; }
+  .legend { font-size:13px; line-height:1.9; margin-top:8px; }
+  .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  .stat { font-size:13px; color:var(--muted); margin-top:12px; padding-top:12px; border-top:1px solid #30363d; }
+  .stat b { color:var(--fg); }
+  .chk { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--fg); margin:10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 Interactive Pose-Graph SLAM</h1>
+  <p>A robot drives a loop; noisy odometry drifts. Add a loop closure and watch a Gauss-Newton
+     pose-graph optimizer snap the whole trajectory back — running live in your browser (no libraries).
+     From <a href="https://github.com/YeonkyunLee/sensor-fusion-lab">sensor-fusion-lab</a>.</p>
+</header>
+<div class="wrap">
+  <div class="stage"><canvas id="cv" width="900" height="640"></canvas></div>
+  <div class="panel">
+    <h2>Controls</h2>
+    <button id="drive" class="primary">▶ Drive the loop</button>
+    <button id="optimize">✦ Add loop closure &amp; optimize</button>
+    <button id="reset">↺ New run</button>
+    <label>Odometry noise <span id="noiseVal"></span></label>
+    <input type="range" id="noise" min="1" max="12" value="5">
+    <div class="legend">
+      <div><span class="dot" style="background:var(--true)"></span>ground truth</div>
+      <div><span class="dot" style="background:var(--odo)"></span>odometry (drifted)</div>
+      <div><span class="dot" style="background:var(--opt)"></span>SLAM optimized</div>
+    </div>
+    <div class="stat" id="stat">Drive the loop to begin.</div>
+  </div>
+</div>
+<script>
+// ---------- SE(2) helpers ----------
+const wrap = a => { while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; return a; };
+function v2t(x,y,th){ const c=Math.cos(th),s=Math.sin(th); return [c,-s,x, s,c,y]; } // 2x3 (row-major of top)
+function compose(a,b){ // a,b as {x,y,th}
+  const c=Math.cos(a.th),s=Math.sin(a.th);
+  return {x:a.x+c*b.x-s*b.y, y:a.y+s*b.x+c*b.y, th:wrap(a.th+b.th)};
+}
+function between(a,b){ // relative pose a->b
+  const c=Math.cos(a.th),s=Math.sin(a.th), dx=b.x-a.x, dy=b.y-a.y;
+  return {x:c*dx+s*dy, y:-s*dx+c*dy, th:wrap(b.th-a.th)};
+}
+function edgeError(xi,xj,z){ // e = between(xi,xj) - z (SE2), returns [ex,ey,eth]
+  const m=between(xi,xj);
+  const c=Math.cos(z.th),s=Math.sin(z.th);
+  const dx=m.x-z.x, dy=m.y-z.y;
+  return [c*dx+s*dy, -s*dx+c*dy, wrap(m.th-z.th)];
+}
+// numerical Jacobian (3x3) wrt xi and xj
+function jac(xi,xj,z){
+  const e0=edgeError(xi,xj,z), eps=1e-5, A=[[0,0,0],[0,0,0],[0,0,0]], B=[[0,0,0],[0,0,0],[0,0,0]];
+  const pert=(p,k)=>({x:p.x+(k==0?eps:0), y:p.y+(k==1?eps:0), th:p.th+(k==2?eps:0)});
+  for(let k=0;k<3;k++){
+    const ea=edgeError(pert(xi,k),xj,z), eb=edgeError(xi,pert(xj,k),z);
+    for(let r=0;r<3;r++){ A[r][k]=(ea[r]-e0[r])/eps; B[r][k]=(eb[r]-e0[r])/eps; }
+  }
+  return {e:e0,A,B};
+}
+// dense linear solve Hx=b (Gaussian elimination with partial pivot)
+function solve(H,b){
+  const n=b.length, M=H.map((r,i)=>r.concat(b[i]));
+  for(let c=0;c<n;c++){
+    let p=c; for(let r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+    [M[c],M[p]]=[M[p],M[c]];
+    const pv=M[c][c]||1e-9;
+    for(let r=0;r<n;r++){ if(r===c)continue; const f=M[r][c]/pv; for(let k=c;k<=n;k++) M[r][k]-=f*M[c][k]; }
+  }
+  return M.map((r,i)=>r[n]/(r[i]||1e-9));
+}
+// ---------- state ----------
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let truth=[], odo=[], est=[], edges=[], N=0, driving=false, optimized=false;
+const noiseEl=document.getElementById('noise'), stat=document.getElementById('stat');
+document.getElementById('noiseVal').textContent='';
+
+function genTruth(){
+  truth=[]; const n=80, R=180, cx=430, cy=330;
+  for(let k=0;k<=n;k++){ const t=2*Math.PI*k/n; truth.push({x:cx+R*Math.cos(t-Math.PI/2), y:cy+R*Math.sin(t-Math.PI/2), th:wrap(t)}); }
+  N=truth.length;
+}
+function randn(){ let u=0,v=0; while(!u)u=Math.random(); while(!v)v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+function buildOdo(){
+  const nz=parseInt(noiseEl.value); // 1..12
+  odo=[{...truth[0]}]; edges=[];
+  for(let k=1;k<N;k++){
+    const zt=between(truth[k-1],truth[k]);
+    const z={x:zt.x+randn()*nz*0.22, y:zt.y+randn()*nz*0.22, th:zt.th+randn()*nz*0.006};
+    odo.push(compose(odo[k-1],z));
+    edges.push({i:k-1,j:k,z,info:1});
+  }
+  est=odo.map(p=>({...p}));
+}
+function addLoopClosure(){
+  // true loop closure: last pose ~ first pose
+  const zt=between(truth[0],truth[N-1]);
+  edges.push({i:0,j:N-1,z:{x:zt.x+randn()*4,y:zt.y+randn()*4,th:zt.th+randn()*0.05},info:1,lc:true});
+}
+// one Gauss-Newton iteration on est, DCS-robust on loop closures, pose0 anchored
+function gnStep(){
+  const n3=3*N, H=Array.from({length:n3},()=>new Array(n3).fill(0)), b=new Array(n3).fill(0);
+  for(const e of edges){
+    const j=jac(est[e.i],est[e.j],e.z); const A=j.A, Bm=j.B, err=j.e.slice();
+    const w=1;
+    const sq=[1,1,60];  // sqrt-information: weight heading (rad) to px scale so it's actually constrained
+    for(let r=0;r<3;r++){ err[r]*=sq[r]; for(let c=0;c<3;c++){ A[r][c]*=sq[r]; Bm[r][c]*=sq[r]; } }
+    const bi=3*e.i, bj=3*e.j;
+    for(let r=0;r<3;r++)for(let c=0;c<3;c++){
+      let AA=0,AB=0,BA=0,BB=0; for(let k=0;k<3;k++){AA+=A[k][r]*A[k][c];AB+=A[k][r]*Bm[k][c];BA+=Bm[k][r]*A[k][c];BB+=Bm[k][r]*Bm[k][c];}
+      H[bi+r][bi+c]+=w*AA; H[bi+r][bj+c]+=w*AB; H[bj+r][bi+c]+=w*BA; H[bj+r][bj+c]+=w*BB;
+    }
+    for(let r=0;r<3;r++){ let ba=0,bb=0; for(let k=0;k<3;k++){ba+=A[k][r]*err[k];bb+=Bm[k][r]*err[k];} b[bi+r]+=w*ba; b[bj+r]+=w*bb; }
+  }
+  for(let r=0;r<3;r++) H[r][r]+=1e6;              // anchor pose 0
+  for(let r=0;r<n3;r++) H[r][r]+=1e-3;
+  const dx=solve(H,b.map(v=>-v));
+  for(let k=0;k<N;k++){ est[k].x+=dx[3*k]; est[k].y+=dx[3*k+1]; est[k].th=wrap(est[k].th+dx[3*k+2]); }
+}
+function rmse(a){ let s=0; for(let k=0;k<N;k++){const dx=a[k].x-truth[k].x,dy=a[k].y-truth[k].y; s+=dx*dx+dy*dy;} return Math.sqrt(s/N)/40; } // /40 ≈ meters
+// ---------- draw ----------
+function poly(arr,color,w){ ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=w; arr.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke(); }
+function draw(driveIdx){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  poly(truth,'#3fb950',3);
+  if(driveIdx!==undefined){ poly(odo.slice(0,driveIdx+1),'#f85149',2); const p=odo[driveIdx]; ctx.fillStyle='#f0f6fc'; ctx.beginPath(); ctx.arc(p.x,p.y,6,0,7); ctx.fill(); }
+  else { poly(odo,'#f85149',2); if(optimized) poly(est,'#58a6ff',2.4); }
+}
+// ---------- flow ----------
+function reset(){ genTruth(); buildOdo(); optimized=false; draw(); stat.innerHTML='Ready. Click <b>Drive the loop</b>.'; }
+function drive(){
+  if(driving) return; driving=true; optimized=false; buildOdo(); let k=0;
+  const step=()=>{ draw(k); k+=1; if(k<N){ requestAnimationFrame(step); } else { driving=false; draw(); stat.innerHTML=`Odometry drift: <b>${rmse(odo).toFixed(2)} m</b>. Now add a loop closure →`; } };
+  step();
+}
+function optimize(){
+  if(driving) return; est=odo.map(p=>({...p})); addLoopClosure(); optimized=true;
+  let it=0; const anim=()=>{ gnStep(); it++; draw(); stat.innerHTML=`Optimizing… iter ${it}<br>odometry <b>${rmse(odo).toFixed(2)} m</b> → SLAM <b style="color:#58a6ff">${rmse(est).toFixed(2)} m</b>`; if(it<12) requestAnimationFrame(anim); else stat.innerHTML=`✅ Loop closed. odometry <b>${rmse(odo).toFixed(2)} m</b> → SLAM <b style="color:#58a6ff">${rmse(est).toFixed(2)} m</b> (${(rmse(odo)/Math.max(rmse(est),1e-6)).toFixed(0)}× better).`; };
+  anim();
+}
+noiseEl.oninput=()=>reset();
+document.getElementById('drive').onclick=drive;
+document.getElementById('optimize').onclick=optimize;
+document.getElementById('reset').onclick=reset;
+reset();
+</script>
+</body>
+</html>

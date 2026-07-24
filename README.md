@@ -9,6 +9,10 @@ where it wins — and where it doesn't.
 
 🇰🇷 아래 한국어 병기.
 
+🎮 **[Try the interactive SLAM demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/slam_demo.html)**
+Drive a robot, watch odometry drift, then a Gauss-Newton pose-graph optimizer snap the whole
+loop shut — live in your browser (`slam_demo.html`, no libraries).
+
 📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
