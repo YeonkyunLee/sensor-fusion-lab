@@ -105,3 +105,11 @@ def test_robust_g2o_dcs_beats_naive_if_present():
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
     none_c, huber_c, dcs_c = mod.main()
     assert dcs_c < none_c * 0.1   # DCS가 거짓 루프클로저를 훨씬 잘 걸러냄
+
+
+def test_fixed_lag_constant_cost_batch_more_accurate():
+    spec = importlib.util.spec_from_file_location("fl17", ROOT / "scripts" / "17_fixed_lag_slam.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    rmse_f, rmse_b, size_f, size_b = mod.main()
+    assert size_f < size_b            # fixed-lag는 스텝당 문제크기 작음(상수)
+    assert rmse_b < rmse_f            # 전체 배치가 더 정확(전역 일관성)

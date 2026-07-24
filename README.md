@@ -316,6 +316,25 @@ pipeline. Noise is realistic: white + random-walk bias + non-Gaussian **spikes**
 
 ![learned imu](assets/16_learned_imu_frontend.png)
 
+### 17. Online SLAM — fixed-lag smoother vs full batch (`scripts/17_fixed_lag_slam.py`)
+Real online estimators (VIO, etc.) can't re-solve the whole trajectory every step. A
+**fixed-lag smoother** optimizes only the last *L* poses (older ones fixed) → constant
+per-step problem size, i.e. **O(1) per step** vs full batch's growing **O(N)**.
+
+| | per-step solve dimension | final trajectory RMSE |
+|--|-------------------------:|----------------------:|
+| **fixed-lag (L=15)** | **constant (≤45)** | 5.76 m |
+| full batch | grows to 420 | **0.67 m** |
+
+- The tradeoff is the point: fixed-lag is **real-time-constant** but sacrifices **global
+  consistency** — a loop closure to a pose *outside* the window can't correct it, so drift
+  in the second lap persists (right panel).
+- This is exactly why production stacks pair a **fixed-lag front-end** with a **global
+  loop-closure back-end** (experiments 7 & 10) — fast local tracking + occasional global
+  correction. Speed and consistency are different jobs.
+
+![fixed-lag](assets/17_fixed_lag_slam.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -343,6 +362,7 @@ python scripts/13_pose_graph_3d.py   # 3D SE(3) pose-graph SLAM
 python scripts/14_g2o_benchmark.py --file data_cache/intel.g2o   # real g2o benchmark
 python scripts/15_robust_g2o.py      # robust SLAM on real Intel + false loop closures
 python scripts/16_learned_imu_frontend.py  # learned IMU denoiser (torch, optional)
+python scripts/17_fixed_lag_slam.py   # online SLAM: fixed-lag vs batch
 pytest -q
 ```
 
@@ -370,6 +390,7 @@ scripts/
   14_g2o_benchmark.py    standard g2o benchmark loader + sparse optimizer (2D/3D)
   15_robust_g2o.py       robust kernels (Huber/DCS) on real Intel + false loop closures
   16_learned_imu_frontend.py  learned 1D-CNN IMU denoiser front-end (ML+estimation)
+  17_fixed_lag_slam.py   online SLAM: fixed-lag smoother vs full batch (speed/consistency)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -391,7 +412,8 @@ tests/
 - [x] Validated on standard g2o benchmarks (Intel 2D, parking-garage 3D)
 - [x] Robust kernels (Huber, DCS) on real g2o benchmark with injected outliers
 - [x] Learned IMU front-end (1D-CNN denoiser feeding dead-reckoning)
-- [ ] Incremental/online SLAM (iSAM-style)
+- [x] Online SLAM: fixed-lag smoother (constant per-step cost) vs full batch
+- [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
 ## License
