@@ -18,9 +18,10 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-18 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+22 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
-benchmarks → learning & systems integration.**
+benchmarks → learning & systems integration → planning/control → new front-ends & a
+medical application.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -41,6 +42,9 @@ benchmarks → learning & systems integration.**
 | 17 | online: fixed-lag vs batch | O(1)/step vs O(N) — speed/consistency tradeoff |
 | 18 | **full SLAM system** | fixed-lag front-end + robust global back-end, 6× (integration) |
 | 19 | planning (A*) + control (pure-pursuit) | reach goal, avoid no-go zone (estimation→action) |
+| 20 | dynamic obstacle avoidance (DWA) | reach goal past 3 **moving** obstacles, 0.92 m clearance |
+| 21 | ICP scan-matching (LiDAR odometry) | **9.3×** over raw dead-reckoning (0.13 vs 1.17 m) |
+| 22 | **surgical tremor cancellation** (medical) | adaptive FLC **10.7×** tremor suppression, 37 µm tracking |
 
 ## Experiments
 
@@ -397,6 +401,61 @@ respecting a **no-go zone** (a sensitive instrument, the lab/medical-safety anal
 
 ![plan control](assets/19_plan_control.png)
 
+### 20. Dynamic obstacle avoidance (DWA) (`scripts/20_dwa_dynamic.py`)
+19번의 A\*는 정적 지도에서 경로를 미리 깔지만, 사람·다른 로봇처럼 움직이는 장애물 앞에선
+그 경로가 곧 무효가 된다. **DWA(Dynamic Window Approach)**는 매 스텝 로봇의 속도공간
+`(v, w)`에서 가속한계로 도달 가능한 창만 샘플링하고, 각 후보로 짧은 궤적을 예측한 뒤
+`heading + goal-distance + clearance + velocity` 점수로 최적 명령을 골라 반응적으로 한 스텝
+나아간다. 장애물의 **미래 위치**까지 예측에 반영해 실시간 충돌 회피를 수행한다.
+
+- 유니사이클 로봇이 등속으로 이동하는 장애물 3개를 피해 목표 도달 (15.8 s), 주행 17.5 m.
+- 최소 장애물 클리어런스 **0.92 m** (충돌 없음); 장애물의 미래 위치를 예측 궤적 전 구간에 반영.
+- **Honest limit:** DWA는 전역 추론이 없는 탐욕적 지역 계획기 — 지역최소 탈출용 goal-distance 항을
+  더했지만, 장애물이 통로를 동시에 막는 적대적 배치에선 순수 지역 계획기는 여전히 갇힐 수 있다.
+  이것이 실무에서 지역 계획기(DWA)를 전역 계획기(A\*, 19번)와 짝짓는 이유.
+
+![dwa](assets/20_dwa_dynamic.png)
+
+### 21. ICP scan-matching for LiDAR odometry (`scripts/21_icp_scan_matching.py`)
+지금까지 오도메트리는 IMU/바퀴 기반이었다. 여기선 **LiDAR 스캔매칭** — 고전적 SLAM 프론트엔드를
+밑바닥부터 구현한다. 연속한 두 2D 점군을 정렬해 그 사이 로봇의 상대 이동 SE(2)를 추정하고 누적해
+궤적을 복원한다. **점-대-점 ICP**: {최근접 대응(KD-tree) → SVD로 최적 강체변환(Umeyama/Kabsch)
+→ 적용 → 수렴까지 반복}. 방 윤곽 벽 + 흩뿌린 기둥 환경에서 잡음 섞인 스캔을 만들고 연속 스캔에
+ICP를 걸어 상대 이동을 적분한다.
+
+| | trajectory RMSE |
+|--|----------------:|
+| raw dead-reckoning (no correction) | 1.17 m |
+| **ICP scan-matching odometry** | **0.13 m** |
+
+- ICP 오도메트리가 무보정 대비 약 **9.3×** 정확; 스캔당 평균 정렬 오차 0.057 m로 잡음 수준까지 수렴.
+- 흩뿌린 기둥 특징이 벽만 보일 때 생기는 **aperture(벽-미끄러짐) 문제**를 깨 정렬을 유일하게 만듦
+  — 실무 스캔매칭의 핵심 조건수 이슈. 최근접 탐색만 `scipy.spatial.cKDTree`, 나머지는 numpy+SVD.
+- 우측 인셋: 회전 구간 한 쌍의 스캔이 ICP 전(빨강)→후(파랑)로 목표 스캔(검정)에 정합되는 모습.
+
+![icp](assets/21_icp_scan_matching.png)
+
+### 22. Surgical tremor cancellation (medical) (`scripts/22_surgical_tremor.py`)
+미세수술 로봇은 집도의 손의 **생리적 수전증(~8–12 Hz, 수백 µm)**만 제거하고 의도한 저주파 큰
+움직임은 그대로 따라야 한다(steady-hand robot). DSP·추정·의료가 만나는 지점. 500 Hz로 2D 리칭
+궤적 + ~10 Hz 수전증 + 센서 잡음을 합성하고 네 기법의 잔여 떨림(대역 RMS)과 추종오차를 비교한다.
+
+| method | 잔여 떨림 | 억제 | 추종오차 | 특성 |
+|--------|--------:|-----:|--------:|------|
+| low-pass (filtfilt 5 Hz) | 0.9 µm | 212× | 7.8 µm | 영위상 = **비인과**(오프라인) |
+| band-stop (filtfilt 7–13 Hz) | 1.1 µm | 175× | 30 µm | 비인과(오프라인) |
+| Kalman CV (causal) | 45 µm | 4.1× | 146 µm | 실시간, 전대역 스무딩 → 지연 |
+| **adaptive FLC (causal)** | **17.6 µm** | **10.7×** | **37 µm** | 실시간 최적 |
+
+- 실시간 최적은 **적응형 푸리에 선형결합기(FLC, 적응 노치)**: 떨림 188 → 17.6 µm(**10.7× 억제**),
+  추종오차 37 µm(의도 30 mm 리칭 대비 미미).
+- **Honest trade-off:** filtfilt가 수치는 최고(200×)지만 영위상 = 비인과라 오프라인 후처리 전용;
+  Kalman은 전대역 스무딩이라 빠른 동작에서 지연. FLC만 떨림 대역만 노치처럼 제거해 인과성과 의도동작
+  보존을 동시에 달성. 순수 LMS는 의도동작(떨림의 ~150배)이 그래디언트를 지배해 불안정 → 오차의
+  고역통과 성분으로만 가중치를 갱신해 해결.
+
+![tremor](assets/22_surgical_tremor.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -427,6 +486,9 @@ python scripts/16_learned_imu_frontend.py  # learned IMU denoiser (torch, option
 python scripts/17_fixed_lag_slam.py   # online SLAM: fixed-lag vs batch
 python scripts/18_full_slam_system.py # full system: front-end + robust back-end
 python scripts/19_plan_control.py     # planning (A*) + control (pure-pursuit)
+python scripts/20_dwa_dynamic.py      # dynamic obstacle avoidance (DWA)
+python scripts/21_icp_scan_matching.py  # ICP scan-matching LiDAR odometry
+python scripts/22_surgical_tremor.py  # surgical tremor cancellation (medical)
 pytest -q
 ```
 
@@ -457,6 +519,9 @@ scripts/
   17_fixed_lag_slam.py   online SLAM: fixed-lag smoother vs full batch (speed/consistency)
   18_full_slam_system.py  integrated: fixed-lag front-end + robust global back-end
   19_plan_control.py     beyond estimation: A* planning + pure-pursuit control (nav)
+  20_dwa_dynamic.py      dynamic obstacle avoidance (Dynamic Window Approach)
+  21_icp_scan_matching.py  ICP scan-matching LiDAR odometry (classic SLAM front-end)
+  22_surgical_tremor.py  surgical physiological-tremor cancellation (medical; DSP+estimation)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -479,6 +544,10 @@ tests/
 - [x] Robust kernels (Huber, DCS) on real g2o benchmark with injected outliers
 - [x] Learned IMU front-end (1D-CNN denoiser feeding dead-reckoning)
 - [x] Online SLAM: fixed-lag smoother (constant per-step cost) vs full batch
+- [x] Planning + control: A* + pure-pursuit (reach goal, avoid no-go zone)
+- [x] Dynamic obstacle avoidance (DWA local planner, moving obstacles)
+- [x] ICP scan-matching for LiDAR odometry (classic SLAM front-end)
+- [x] Medical application: surgical physiological-tremor cancellation (DSP+estimation)
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 

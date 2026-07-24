@@ -74,6 +74,7 @@ def lowpass(x, alpha=0.15):
 
 def main():
     rng = np.random.default_rng(0)
+    torch.manual_seed(0)   # 모델 초기화·DataLoader 셔플 결정화(테스트 재현성)
     # 학습 데이터: (noisy, clean) 윈도우
     N = 3000
     C = np.empty((N, WIN), np.float32); Z = np.empty((N, WIN), np.float32)
