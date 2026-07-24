@@ -113,3 +113,10 @@ def test_fixed_lag_constant_cost_batch_more_accurate():
     rmse_f, rmse_b, size_f, size_b = mod.main()
     assert size_f < size_b            # fixed-lag는 스텝당 문제크기 작음(상수)
     assert rmse_b < rmse_f            # 전체 배치가 더 정확(전역 일관성)
+
+
+def test_full_slam_system_backend_corrects_frontend():
+    spec = importlib.util.spec_from_file_location("fs18", ROOT / "scripts" / "18_full_slam_system.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    fe_rmse, full_rmse = mod.main()
+    assert full_rmse < fe_rmse * 0.5   # 전역 백엔드가 프론트엔드 드리프트를 크게 교정

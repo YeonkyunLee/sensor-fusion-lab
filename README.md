@@ -335,6 +335,25 @@ per-step problem size, i.e. **O(1) per step** vs full batch's growing **O(N)**.
 
 ![fixed-lag](assets/17_fixed_lag_slam.png)
 
+### 18. Full SLAM system — front-end + robust back-end integrated (`scripts/18_full_slam_system.py`)
+The capstone that puts the pieces together into the actual production architecture
+(ORB-SLAM / VINS style): a **fixed-lag front-end** gives a real-time pose every step
+(drifts), while a **global pose-graph back-end** with a **DCS robust kernel** fires on
+loop-closure detection — correcting the whole trajectory and rejecting false closures.
+
+| | trajectory RMSE |
+|--|----------------:|
+| front-end only (fixed-lag, real-time) | 10.76 m |
+| **full system (+ robust global back-end)** | **1.68 m** |
+
+- The back-end cuts front-end drift **6×** and **rejects 2 injected false loop closures**
+  (DCS) — combining experiments 7, 10, 11/15, 17 into one working system.
+- This is the real answer to "speed vs consistency": a fast local front-end *and* an
+  occasional global back-end, each doing the job it's good at. **Systems integration, not
+  just isolated components.**
+
+![full system](assets/18_full_slam_system.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -363,6 +382,7 @@ python scripts/14_g2o_benchmark.py --file data_cache/intel.g2o   # real g2o benc
 python scripts/15_robust_g2o.py      # robust SLAM on real Intel + false loop closures
 python scripts/16_learned_imu_frontend.py  # learned IMU denoiser (torch, optional)
 python scripts/17_fixed_lag_slam.py   # online SLAM: fixed-lag vs batch
+python scripts/18_full_slam_system.py # full system: front-end + robust back-end
 pytest -q
 ```
 
@@ -391,6 +411,7 @@ scripts/
   15_robust_g2o.py       robust kernels (Huber/DCS) on real Intel + false loop closures
   16_learned_imu_frontend.py  learned 1D-CNN IMU denoiser front-end (ML+estimation)
   17_fixed_lag_slam.py   online SLAM: fixed-lag smoother vs full batch (speed/consistency)
+  18_full_slam_system.py  integrated: fixed-lag front-end + robust global back-end
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
