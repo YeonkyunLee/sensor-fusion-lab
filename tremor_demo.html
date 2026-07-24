@@ -1,0 +1,346 @@
+---
+layout: none
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive Surgical Tremor Cancellation — sensor-fusion-lab</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --intended:#3fb950; --raw:#f85149; --canc:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; max-width:820px; }
+  header a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; flex-wrap:wrap; gap:18px; padding:18px 22px; }
+  .stage { flex:1 1 520px; min-width:320px; }
+  canvas { width:100%; background:#0a0e14; border:1px solid #30363d; border-radius:10px; display:block; cursor:crosshair; touch-action:none; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; }
+  .panel { flex:0 0 270px; background:var(--panel); border:1px solid #30363d; border-radius:10px; padding:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  button { width:100%; padding:10px; margin:6px 0; border:1px solid #30363d; border-radius:8px; background:#21262d; color:var(--fg); font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.active { background:var(--accent); color:#0d1117; font-weight:600; border-color:var(--accent); }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  label b { color:var(--fg); }
+  input[type=range] { width:100%; }
+  .legend { font-size:13px; line-height:1.9; margin-top:12px; }
+  .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  .stat { font-size:13px; color:var(--muted); margin-top:12px; padding-top:12px; border-top:1px solid #30363d; line-height:1.7; }
+  .stat b { color:var(--fg); }
+  .big { font-size:22px; color:var(--canc); font-weight:700; }
+  .note { color:var(--muted); font-size:11px; margin-top:12px; padding-top:10px; border-top:1px solid #30363d; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🩺 Interactive Surgical Tremor Cancellation</h1>
+  <p>Move your mouse over the canvas — that is the <b style="color:var(--intended)">surgeon's intended hand motion</b>.
+     The demo injects a synthetic ~10&nbsp;Hz physiological hand tremor to make the
+     <b style="color:var(--raw)">raw tremulous tool tip</b>, then a real-time adaptive filter (a causal
+     Fourier-Linear-Combiner / adaptive notch) cancels it so the <b style="color:var(--canc)">robot tool tip</b>
+     tracks the intended path smoothly. Runs live in your browser, no libraries.
+     From <a href="https://github.com/YeonkyunLee/sensor-fusion-lab">sensor-fusion-lab</a>.</p>
+</header>
+<div class="wrap">
+  <div class="stage">
+    <canvas id="cv" width="900" height="640"></canvas>
+    <div class="hint">Move the pointer to "operate". Hold still to see the steady-hand hold. Touch/drag works too.</div>
+  </div>
+  <div class="panel">
+    <h2>Controls</h2>
+    <button id="freeze">✋ Freeze hand (hold still)</button>
+    <button id="reset">↺ Reset filter</button>
+    <label>Tremor amplitude <b id="ampVal"></b></label>
+    <input type="range" id="amp" min="2" max="34" value="16">
+    <label>Filter strength (adaptation) <b id="muVal"></b></label>
+    <input type="range" id="mu" min="2" max="40" value="20">
+    <div class="legend">
+      <div><span class="dot" style="background:var(--intended)"></span>intended motion (your hand)</div>
+      <div><span class="dot" style="background:var(--raw)"></span>raw tip (+ 10&nbsp;Hz tremor)</div>
+      <div><span class="dot" style="background:var(--canc)"></span>cancelled tip (robot)</div>
+    </div>
+    <div class="stat" id="stat">
+      <div class="big" id="supp">—</div>
+      <div id="detail">Move the mouse to begin.</div>
+    </div>
+    <div class="note">Personal side project — fully synthetic demo, no real patient/device data.
+      Honest trade-off: a <i>causal</i> real-time filter can't be zero-lag. Turning
+      adaptation up suppresses more tremor but adds a little tracking lag on fast moves;
+      the FLC notches only the tremor band, so it keeps lag small.</div>
+  </div>
+</div>
+<script>
+// ==================================================================
+// <<FLC-CORE>>  (DOM-free, node-testable — extracted verbatim by the headless test)
+// Adaptive tremor cancellation ported from scripts/22_surgical_tremor.py
+// ------------------------------------------------------------------
+// Transposed Direct-Form-II biquad. Returns a stateful step(x) closure.
+function makeBiquad(b0,b1,b2,a1,a2){
+  let z1=0,z2=0;
+  return function(x){
+    const y = b0*x + z1;
+    z1 = b1*x - a1*y + z2;
+    z2 = b2*x - a2*y;
+    return y;
+  };
+}
+// RBJ high-pass biquad (used to isolate the tremor band inside the FLC update).
+function biquadHighpass(fc, fs, Q){
+  Q = Q || 0.70710678;
+  const w0 = 2*Math.PI*fc/fs, cw = Math.cos(w0), sw = Math.sin(w0), al = sw/(2*Q);
+  const a0 = 1+al;
+  return makeBiquad((1+cw)/2/a0, -(1+cw)/a0, (1+cw)/2/a0, (-2*cw)/a0, (1-al)/a0);
+}
+// RBJ constant-0dB-peak band-pass biquad (used only to *measure* residual tremor).
+function biquadBandpass(f0, fs, Q){
+  const w0 = 2*Math.PI*f0/fs, cw = Math.cos(w0), sw = Math.sin(w0), al = sw/(2*Q);
+  const a0 = 1+al;
+  return makeBiquad(al/a0, 0, -al/a0, (-2*cw)/a0, (1-al)/a0);
+}
+// Adaptive Fourier-Linear-Combiner (FLC), causal / real-time.
+//   Models the tremor as sin/cos (+ harmonics) at f0 with LMS-adapted weights,
+//   and subtracts the estimate:  output = measurement - tremor_estimate.
+//   The weights adapt on a HIGH-PASSED error only, so the huge low-frequency
+//   intended motion doesn't corrupt the tremor-amplitude estimate.
+//   Call step(z, t): z = current position measurement, t = time [s]. Returns
+//   the de-tremored position. One instance per axis.
+function createFLC(opts){
+  const f0 = opts.f0, fs = opts.fs;
+  const mu = (opts.mu == null ? 0.05 : opts.mu);
+  const nHarm = opts.nHarm || 1;
+  const fc = opts.fc || 4.0;
+  const hp = biquadHighpass(fc, fs);
+  const w = new Float64Array(2*nHarm);
+  const r = new Float64Array(2*nHarm);
+  const norm = nHarm;
+  const twoPi = 2*Math.PI;
+  return {
+    weights: w,
+    step: function(z, t){
+      let y = 0;
+      for(let h=0; h<nHarm; h++){
+        const ph = twoPi*f0*(h+1)*t;
+        const s = Math.sin(ph), c = Math.cos(ph);
+        r[2*h] = s; r[2*h+1] = c;
+        y += w[2*h]*s + w[2*h+1]*c;
+      }
+      const err = z - y;              // output: intended (+noise), tremor removed
+      const ehp = hp(err);            // high-passed error -> only the tremor band drives adaptation
+      const g = 2*mu*ehp/norm;
+      for(let i=0; i<2*nHarm; i++) w[i] += g*r[i];   // LMS amplitude update
+      return err;
+    }
+  };
+}
+// <<FLC-CORE-END>>
+// ==================================================================
+
+if (typeof module !== 'undefined' && module.exports){
+  module.exports = { makeBiquad, biquadHighpass, biquadBandpass, createFLC };
+}
+
+// ---------------- demo (browser only) ----------------
+if (typeof document !== 'undefined') (function(){
+  const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const SCENE_H = 430, TRACE_Y = 452, TRACE_H = H - TRACE_Y - 12;
+
+  const FS = 250;               // internal simulation / filter sample rate [Hz]
+  const F0 = 10.0;              // physiological tremor centre frequency [Hz]
+  const N_HARM = 1;
+  const HP_FC = 4.0;            // FLC adaptation high-pass corner [Hz]
+  const BP_Q = 2.0;             // measurement band-pass sharpness (order-4 cascade)
+
+  // controls
+  const ampEl = document.getElementById('amp'),  ampVal = document.getElementById('ampVal');
+  const muEl  = document.getElementById('mu'),   muVal  = document.getElementById('muVal');
+  const suppEl = document.getElementById('supp'), detailEl = document.getElementById('detail');
+  const freezeBtn = document.getElementById('freeze'), resetBtn = document.getElementById('reset');
+
+  let tremorAmp = +ampEl.value;      // px
+  let mu = (+muEl.value)/100;        // adaptation gain
+  let frozen = false;
+
+  // pointer / intended state
+  let mouse = {x: W*0.5, y: SCENE_H*0.5};
+  let intended = {x: mouse.x, y: mouse.y};
+  let haveInput = false;
+
+  // filters (per axis) + measurement band-pass (per axis, raw & cancelled).
+  // The measurement uses two cascaded biquads (order-4) to match exp-22's
+  // filtfilt band-pass, so the on-screen suppression number is honest.
+  function cascade2(){ const a = biquadBandpass(F0, FS, BP_Q), b = biquadBandpass(F0, FS, BP_Q); return x => b(a(x)); }
+  let flcX, flcY, bpRawX, bpRawY, bpCanX, bpCanY, msRaw, msCan;
+  function buildFilters(){
+    flcX = createFLC({f0:F0, fs:FS, mu:mu, nHarm:N_HARM, fc:HP_FC});
+    flcY = createFLC({f0:F0, fs:FS, mu:mu, nHarm:N_HARM, fc:HP_FC});
+    bpRawX = cascade2(); bpRawY = cascade2();
+    bpCanX = cascade2(); bpCanY = cascade2();
+    msRaw = 0; msCan = 0;
+  }
+  buildFilters();
+
+  // trace ring buffers (deviation from intended, in px) — isolates the tremor
+  const TRACE_N = Math.round(FS*2.4);
+  const rawTr = new Float64Array(TRACE_N), canTr = new Float64Array(TRACE_N);
+  let trHead = 0, trFilled = 0;
+
+  // live tips
+  let rawTip = {x: intended.x, y: intended.y}, canTip = {x: intended.x, y: intended.y};
+  // short trails for the 2D scene
+  const trailN = 90;
+  const rawTrail = [], canTrail = [], intTrail = [];
+
+  let tSim = 0;                       // simulation clock [s]
+  const EMA = 1 - Math.exp(-1/(FS*0.6));   // ~0.6 s averaging for the readout
+
+  function stepSim(dt){
+    tSim += dt;
+    // intended motion = smoothed pointer (a real hand path is smooth, not jumpy)
+    if(!frozen){
+      const k = 1 - Math.exp(-dt*22);       // ~fast follow, light smoothing
+      intended.x += (mouse.x - intended.x)*k;
+      intended.y += (mouse.y - intended.y)*k;
+    }
+    // amplitude/frequency modulated ~10 Hz tremor (matches exp 22), + sensor noise
+    const amp = tremorAmp * (1 + 0.3*Math.sin(2*Math.PI*1.3*tSim));
+    const fjit = F0 + 0.3*Math.sin(2*Math.PI*0.4*tSim);
+    const ph = 2*Math.PI*fjit*tSim;
+    const trX = amp*Math.sin(ph);
+    const trY = 0.85*amp*Math.sin(ph + 1.1);
+    const nX = (Math.random()-0.5)*tremorAmp*0.08;
+    const nY = (Math.random()-0.5)*tremorAmp*0.08;
+    const rawX = intended.x + trX + nX;
+    const rawY = intended.y + trY + nY;
+    // cancellation — note the filter runs on ABSOLUTE position (it never sees "intended")
+    const canX = flcX.step(rawX, tSim);
+    const canY = flcY.step(rawY, tSim);
+    rawTip.x = rawX; rawTip.y = rawY; canTip.x = canX; canTip.y = canY;
+
+    // metrics: residual tremor energy in the 8–12 Hz band (band-pass RMS)
+    const brx = bpRawX(rawX), bry = bpRawY(rawY);
+    const bcx = bpCanX(canX), bcy = bpCanY(canY);
+    msRaw += EMA*((brx*brx + bry*bry) - msRaw);
+    msCan += EMA*((bcx*bcx + bcy*bcy) - msCan);
+
+    // trace = deviation from intended (isolates the tremor for the eye)
+    rawTr[trHead] = rawX - intended.x;
+    canTr[trHead] = canX - intended.x;
+    trHead = (trHead+1) % TRACE_N;
+    if(trFilled < TRACE_N) trFilled++;
+  }
+
+  // fixed-timestep accumulator so behaviour is frame-rate independent
+  let lastT = null, acc = 0;
+  function tick(now){
+    if(lastT === null) lastT = now;
+    let dtReal = (now - lastT)/1000; lastT = now;
+    if(dtReal > 0.1) dtReal = 0.1;          // don't spiral after a background tab
+    acc += dtReal;
+    const dt = 1/FS;
+    let guard = 0;
+    while(acc >= dt && guard < 1200){ stepSim(dt); acc -= dt; guard++; }
+    render();
+    requestAnimationFrame(tick);
+  }
+
+  function pushTrail(arr, x, y){ arr.push({x,y}); if(arr.length>trailN) arr.shift(); }
+
+  function render(){
+    pushTrail(rawTrail, rawTip.x, rawTip.y);
+    pushTrail(canTrail, canTip.x, canTip.y);
+    pushTrail(intTrail, intended.x, intended.y);
+
+    ctx.clearRect(0,0,W,H);
+
+    // ---- scene divider + labels ----
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, SCENE_H+11); ctx.lineTo(W, SCENE_H+11); ctx.stroke();
+    ctx.fillStyle = '#8b949e'; ctx.font = '12px -apple-system,Segoe UI,sans-serif';
+    ctx.fillText('tool tips (live)', 12, 20);
+    ctx.fillText('tremor trace — deviation from intended path  ·  raw vs cancelled  →  scrolls', 12, SCENE_H+34);
+
+    // ---- 2D scene: trails ----
+    function poly(arr,color,w,alpha){ if(arr.length<2) return; ctx.globalAlpha=alpha; ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=w; arr.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y)); ctx.stroke(); ctx.globalAlpha=1; }
+    poly(intTrail, '#3fb950', 2, 0.55);
+    poly(rawTrail, '#f85149', 1.5, 0.45);
+    poly(canTrail, '#58a6ff', 2, 0.75);
+
+    // intended target (green ring)
+    ctx.strokeStyle = '#3fb950'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(intended.x, intended.y, 9, 0, 7); ctx.stroke();
+    // raw tremulous tip (red, jittering)
+    ctx.fillStyle = '#f85149'; ctx.beginPath(); ctx.arc(rawTip.x, rawTip.y, 5, 0, 7); ctx.fill();
+    // cancelled robot tip (blue, steady)
+    ctx.fillStyle = '#58a6ff'; ctx.beginPath(); ctx.arc(canTip.x, canTip.y, 6, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#0a0e14'; ctx.lineWidth = 1.5; ctx.stroke();
+
+    if(!haveInput){
+      ctx.fillStyle = '#8b949e'; ctx.font = '14px -apple-system,Segoe UI,sans-serif';
+      ctx.fillText('◀ move your mouse over this canvas', intended.x+16, intended.y-12);
+    }
+
+    // ---- scrolling trace ----
+    const midY = TRACE_Y + TRACE_H/2;
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(12, midY); ctx.lineTo(W-12, midY); ctx.stroke();
+    const scale = Math.min((TRACE_H/2 - 6) / Math.max(tremorAmp*1.4, 6), 6);
+    function drawTrace(buf, color, wid){
+      ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=wid;
+      const x0=12, x1=W-12, span=x1-x0;
+      for(let i=0;i<trFilled;i++){
+        const idx = (trHead - trFilled + i + TRACE_N) % TRACE_N;
+        const x = x0 + span*(i/(TRACE_N-1));
+        let y = midY - buf[idx]*scale;
+        if(y<TRACE_Y) y=TRACE_Y; if(y>TRACE_Y+TRACE_H) y=TRACE_Y+TRACE_H;
+        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+    drawTrace(rawTr, '#f85149', 1.2);
+    drawTrace(canTr, '#58a6ff', 1.8);
+
+    // ---- readout ----
+    const rawRms = Math.sqrt(Math.max(msRaw,0));
+    const canRms = Math.sqrt(Math.max(msCan,1e-9));
+    const supp = rawRms / canRms;
+    if(haveInput && trFilled > FS){
+      suppEl.textContent = 'tremor suppressed ' + supp.toFixed(1) + '×';
+      detailEl.innerHTML = 'residual tremor <b>' + rawRms.toFixed(1) + ' px</b> → <b style="color:#58a6ff">'
+        + canRms.toFixed(2) + ' px</b> (8–12 Hz band RMS)';
+    } else {
+      suppEl.textContent = '—';
+    }
+  }
+
+  // ---- input ----
+  function setMouse(clientX, clientY){
+    const r = cv.getBoundingClientRect();
+    const x = (clientX - r.left) * (W/r.width);
+    const y = (clientY - r.top)  * (H/r.height);
+    mouse.x = Math.max(20, Math.min(W-20, x));
+    mouse.y = Math.max(20, Math.min(SCENE_H-10, y));
+    haveInput = true;
+  }
+  cv.addEventListener('mousemove', e => setMouse(e.clientX, e.clientY));
+  cv.addEventListener('touchmove', e => { if(e.touches[0]){ setMouse(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); } }, {passive:false});
+  cv.addEventListener('touchstart', e => { if(e.touches[0]) setMouse(e.touches[0].clientX, e.touches[0].clientY); });
+
+  ampEl.oninput = () => { tremorAmp = +ampEl.value; ampVal.textContent = tremorAmp + ' px'; };
+  muEl.oninput  = () => { mu = (+muEl.value)/100; muVal.textContent = mu.toFixed(2); buildFilters(); };
+  ampVal.textContent = tremorAmp + ' px';
+  muVal.textContent = mu.toFixed(2);
+
+  freezeBtn.onclick = () => { frozen = !frozen; freezeBtn.classList.toggle('active', frozen);
+    freezeBtn.textContent = frozen ? '▶ Resume (hand moving)' : '✋ Freeze hand (hold still)'; };
+  resetBtn.onclick = () => { buildFilters(); trHead=0; trFilled=0; rawTr.fill(0); canTr.fill(0); };
+
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

@@ -13,15 +13,20 @@ where it wins — and where it doesn't.
 Drive a robot, watch odometry drift, then a Gauss-Newton pose-graph optimizer snap the whole
 loop shut — live in your browser (`slam_demo.html`, no libraries).
 
+🩺 **[Try the interactive surgical-tremor demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/tremor_demo.html)**
+Move your mouse as a "surgeon's hand"; a real-time adaptive Fourier-Linear-Combiner cancels the
+injected ~10 Hz physiological tremor so the robot tool tip tracks your intended motion (~6× tremor
+suppression, live in-browser, no libraries).
+
 📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-22 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+24 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
-medical application.**
+medical application → full LiDAR SLAM & MPC.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -45,6 +50,8 @@ medical application.**
 | 20 | dynamic obstacle avoidance (DWA) | reach goal past 3 **moving** obstacles, 0.92 m clearance |
 | 21 | ICP scan-matching (LiDAR odometry) | **9.3×** over raw dead-reckoning (0.13 vs 1.17 m) |
 | 22 | **surgical tremor cancellation** (medical) | adaptive FLC **10.7×** tremor suppression, 37 µm tracking |
+| 23 | **full 2D LiDAR SLAM** (ICP + pose-graph) | 43 loop closures, drift **3.3×** (0.89 → 0.27 m) |
+| 24 | model-predictive control (MPC) tracking | **3×** tighter than pure-pursuit, respects actuator limits |
 
 ## Experiments
 
@@ -456,6 +463,51 @@ ICP를 걸어 상대 이동을 적분한다.
 
 ![tremor](assets/22_surgical_tremor.png)
 
+> 🩺 There's a live **[in-browser demo](https://yeonkyunlee.github.io/sensor-fusion-lab/tremor_demo.html)**
+> (`tremor_demo.html`) — move your mouse and watch the ~10 Hz tremor get cancelled in real time.
+
+### 23. Full 2D LiDAR SLAM — ICP front-end + pose-graph back-end (`scripts/23_lidar_slam.py`)
+The integration piece tying exp 21 (ICP scan-matching odometry) to exp 7 (SE(2) pose-graph). The
+**front-end** aligns consecutive LiDAR scans with point-to-point ICP → relative-motion odometry edges;
+over two laps the per-scan errors accumulate into visible drift. A **place-recognition** step flags
+revisited poses (radius search on the drifting estimate), confirms each with ICP between the current and
+past scan (residual + translation-sanity gate), and adds loop-closure edges. The **back-end**
+(Gauss-Newton on the SE(2) pose-graph, reusing `src/sensor_fusion/posegraph.py`) optimizes odometry +
+loop-closure constraints, re-linearizing the whole trajectory so the loop snaps shut.
+
+| trajectory | RMSE vs truth | end-point drift |
+|--|----------:|---------:|
+| ICP odometry (front-end only) | 0.890 m | 1.894 m |
+| **graph-optimized (front-end + back-end)** | **0.270 m** | **0.019 m** |
+
+- 165 poses, 2-lap loop, 164 odometry + **43 ICP-verified loop-closure** edges. Back-end cuts drift
+  **3.3×** (χ² 18,739 → 3.85 in 4 iterations); the drifting spiral snaps onto the true loop.
+- This is a **complete LiDAR SLAM pipeline** — a different sensor modality (range scans, not
+  bearing/IMU) feeding the same graph back-end proven in exps 7/10/14. Front-end + back-end, again.
+
+![lidar slam](assets/23_lidar_slam.png)
+
+### 24. Model-predictive control (MPC) trajectory tracking (`scripts/24_mpc_tracking.py`)
+Pure-pursuit (exp 19) steers off a single lookahead point — simple and fast, but it cuts corners on
+tight curves and can't reason about actuator limits. **MPC** instead optimizes a short horizon of control
+inputs at every step to minimize tracking error + control effort subject to `|v|,|w|` (and acceleration)
+limits, applies the first input, and repeats (receding horizon). The unicycle model is linearized about
+the reference into a condensed convex QP; the baseline is exp 19-style pure-pursuit on the same figure-8
+(Bernoulli lemniscate).
+
+| controller | cross-track RMSE | max error (corner-cut) | respects `|v|,|w|` limits |
+|--|----------:|----------:|:--|
+| pure-pursuit | 0.058 m | 0.111 m | — (fixed law) |
+| **MPC** | **0.019 m** | **0.036 m** | yes (|v|=2.04≤2.6, |w|=0.84≤1.5) |
+
+- MPC tracks **~3×** tighter in both average and worst-case error, mainly by not chording across the
+  lobes, while keeping controls inside the actuator envelope.
+- **Honest tradeoff:** on this moderate-curvature track pure-pursuit is already good (cm-scale), and MPC
+  pays a real compute cost (a QP solve every step) for its edge — the gap widens as curvature approaches
+  the actuator limits.
+
+![mpc](assets/24_mpc_tracking.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -489,6 +541,8 @@ python scripts/19_plan_control.py     # planning (A*) + control (pure-pursuit)
 python scripts/20_dwa_dynamic.py      # dynamic obstacle avoidance (DWA)
 python scripts/21_icp_scan_matching.py  # ICP scan-matching LiDAR odometry
 python scripts/22_surgical_tremor.py  # surgical tremor cancellation (medical)
+python scripts/23_lidar_slam.py       # full 2D LiDAR SLAM (ICP + pose-graph)
+python scripts/24_mpc_tracking.py     # MPC trajectory tracking vs pure-pursuit
 pytest -q
 ```
 
@@ -522,6 +576,8 @@ scripts/
   20_dwa_dynamic.py      dynamic obstacle avoidance (Dynamic Window Approach)
   21_icp_scan_matching.py  ICP scan-matching LiDAR odometry (classic SLAM front-end)
   22_surgical_tremor.py  surgical physiological-tremor cancellation (medical; DSP+estimation)
+  23_lidar_slam.py       full 2D LiDAR SLAM: ICP front-end + pose-graph back-end + loop closure
+  24_mpc_tracking.py     model-predictive control trajectory tracking vs pure-pursuit
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -548,6 +604,9 @@ tests/
 - [x] Dynamic obstacle avoidance (DWA local planner, moving obstacles)
 - [x] ICP scan-matching for LiDAR odometry (classic SLAM front-end)
 - [x] Medical application: surgical physiological-tremor cancellation (DSP+estimation)
+- [x] Full 2D LiDAR SLAM: ICP scan-matching front-end + pose-graph back-end + loop closure
+- [x] Model-predictive control (MPC) trajectory tracking (vs pure-pursuit, actuator limits)
+- [x] Interactive in-browser demos (pose-graph SLAM, surgical-tremor cancellation)
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
