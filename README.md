@@ -23,10 +23,11 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-27 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+29 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
-medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait.**
+medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
+→ a navigation capstone & 3D LiDAR SLAM.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -55,6 +56,8 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 25 | occupancy-grid mapping (scan-to-map) | log-odds ray-cast map, IoU **0.72**; scan-to-map sharpens noisy poses |
 | 26 | obstacle-avoiding MPC | avoids (clearance +0.46 m) where plain MPC collides (−0.85 m) |
 | 27 | **gait-phase estimation** (rehab exo, medical) | stance **96%**, ZUPT stride **~41×** over naive integration |
+| 28 | **navigation capstone** (A* + obstacle-MPC) | reaches goal past moving obstacles (+0.62 m) where plain tracker collides |
+| 29 | **3D LiDAR SLAM** (point-to-plane ICP + SE(3)) | 62 loop closures, 3D drift **2.0×** (0.33 → 0.17 m) |
 
 ## Experiments
 
@@ -570,6 +573,48 @@ distance — versus naive double integration.
 
 ![gait](assets/27_gait_estimation.png)
 
+### 28. Full navigation capstone — A* global + obstacle-aware MPC local (`scripts/28_full_navigation.py`)
+The integration capstone of the planning/control track. A **global A\*** planner finds a path through the
+static map (walls + a no-go zone) on an inflated occupancy grid; the path is smoothed into a constant-speed
+reference; then the **obstacle-aware MPC local controller** (from exp 26) tracks it while reactively bending
+around **moving obstacles the global plan never knew about** — predicting each over the horizon and
+respecting actuator limits. Ablation: following the same A\* path with a plain, obstacle-unaware tracker
+drives straight into the moving obstacles.
+
+| system | reaches goal | min moving-obstacle clearance | static-map clearance | limits |
+|--|:--|----------:|----------:|:--|
+| **full (A\* + obstacle-aware MPC)** | yes | **+0.62 m** (safe) | +0.27 m (safe) | ok |
+| plain tracker (obstacle-unaware) | yes | **−0.85 m** (collides ×3) | — | — |
+
+- The point: a global plan alone is not enough in a dynamic world — **local reactivity is what makes it
+  safe**. Combines A\* (exp 19), MPC (exp 24) and obstacle-aware MPC (exp 26) into one mission.
+- Honest limits: the global path is fixed (no replanning); the soft barrier strongly attracts but does not
+  *guarantee* clearance; a moving obstacle sealing a narrow corridor can trap the local controller in a
+  local minimum (needs global replanning, not handled here).
+
+![full nav](assets/28_full_navigation.png)
+
+### 29. 3D LiDAR SLAM — point-to-plane ICP + SE(3) pose-graph (`scripts/29_lidar_slam_3d.py`)
+Exp 23's 2D LiDAR SLAM lifted to **3D / 6-DOF**. A drone/legged robot moves in 3D; a 3D LiDAR sweeps the
+surface points of walls, floor, ceiling and pillars. The **front-end** runs **point-to-plane ICP** (local
+normals from k-NN PCA on the target cloud, point-to-plane residual minimized in the se(3) tangent) between
+consecutive scans to produce SE(3) odometry that drifts over the loop. The **back-end** verifies revisits
+with ICP and optimizes the whole 6-DOF trajectory with the manifold SE(3) Gauss-Newton pose-graph
+(reusing `src/sensor_fusion/posegraph3d.py`). Wall/floor normals spanning all three axes make the 6 DOF
+observable, so point-to-plane converges fast.
+
+| trajectory | 3D RMSE | end-point error |
+|--|----------:|---------:|
+| ICP odometry (point-to-plane) | 0.329 m | 0.220 m |
+| **SE(3) graph-optimized** | **0.166 m** | **0.093 m** |
+
+- Tilted circle × 3 laps (181 poses), 180 odometry + **62 loop-closure** edges. Back-end cuts 3D drift
+  **2.0×** (χ² 1130 → 17.6 in 3 iterations).
+- Honest tradeoffs: point-to-plane degrades to sliding if surface normals collapse onto one plane
+  (point-to-point SVD is the safer fallback there); k-NN PCA normals are sensitive to curvature/density.
+
+![lidar slam 3d](assets/29_lidar_slam_3d.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -608,6 +653,8 @@ python scripts/24_mpc_tracking.py     # MPC trajectory tracking vs pure-pursuit
 python scripts/25_occupancy_mapping.py  # occupancy-grid mapping (scan-to-map)
 python scripts/26_mpc_obstacle.py     # obstacle-avoiding MPC
 python scripts/27_gait_estimation.py  # gait-phase estimation (rehab exoskeleton)
+python scripts/28_full_navigation.py  # navigation capstone: A* + obstacle-aware MPC
+python scripts/29_lidar_slam_3d.py    # 3D LiDAR SLAM (point-to-plane ICP + SE(3))
 pytest -q
 ```
 
@@ -646,6 +693,8 @@ scripts/
   25_occupancy_mapping.py  occupancy-grid mapping: log-odds ray casting + scan-to-map
   26_mpc_obstacle.py     obstacle-avoiding MPC (soft-barrier collision avoidance)
   27_gait_estimation.py  gait-phase estimation for a rehab exoskeleton (IMU + ZUPT)
+  28_full_navigation.py  navigation capstone: A* global + obstacle-aware MPC local
+  29_lidar_slam_3d.py    3D LiDAR SLAM: point-to-plane ICP + SE(3) pose-graph
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -678,6 +727,8 @@ tests/
 - [x] Occupancy-grid mapping (log-odds ray casting + scan-to-map refinement)
 - [x] Obstacle-avoiding MPC (soft-barrier collision avoidance, moving obstacles)
 - [x] Wearable/rehab: gait-phase estimation + ZUPT stride length (foot IMU)
+- [x] Navigation capstone: A* global plan + obstacle-aware MPC local (dynamic world)
+- [x] 3D LiDAR SLAM: point-to-plane ICP front-end + SE(3) pose-graph back-end
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
