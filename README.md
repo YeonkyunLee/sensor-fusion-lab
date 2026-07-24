@@ -12,6 +12,31 @@ where it wins — and where it doesn't.
 📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
+## Results at a glance
+
+18 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
+benchmarks → learning & systems integration.**
+
+| # | experiment | headline result |
+|---|------------|-----------------|
+| 1–2 | KF tracking · position+IMU fusion | fusion 1.23 m, beats every single sensor; coasts through outage |
+| 3 | EKF vs UKF (CTRV) | nonlinear model +22% on turns (EKF≈UKF, honest) |
+| 4 | online IMU-bias estimation | outage drift −27%; observability made visible |
+| 5 | EKF-SLAM | 17× over odometry (0.19 m traj, 0.11 m map) |
+| 6–7 | loop closure → graph SLAM | one loop-closure edge, whole trajectory 5× |
+| 8 | visual-inertial odometry (VIO) | IMU+bearing cuts drift 3× |
+| 9 | uncertainty-aware safe autonomy | No-Fly-Zone violations 60% → **0%** |
+| 10 | VIO front-end + factor-graph back-end | 2-lap drift 16.3 → 0.68 m (24×) |
+| 11 | robust SLAM (Huber) | rejects false loop closures |
+| 12 | full graph SLAM (pose+landmark BA) | pose 24×, map 20× |
+| 13 | 3D SE(3) pose-graph SLAM | Lie-group manifold GN, 3× |
+| 14 | **standard g2o benchmarks** | Intel χ² 5.15M→216, parking-garage(3D) 16.7k→1.3 |
+| 15 | robust on real Intel + false closures | DCS recovers clean map (χ² 216) vs naive 23k |
+| 16 | learned IMU front-end (1D-CNN) | denoise before dead-reckoning, 1.5× (ML+estimation) |
+| 17 | online: fixed-lag vs batch | O(1)/step vs O(N) — speed/consistency tradeoff |
+| 18 | **full SLAM system** | fixed-lag front-end + robust global back-end, 6× (integration) |
+
 ## Experiments
 
 ### 1. Tracking a maneuvering target (`scripts/01_tracking.py`)
