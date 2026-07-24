@@ -40,6 +40,7 @@ benchmarks → learning & systems integration.**
 | 16 | learned IMU front-end (1D-CNN) | denoise before dead-reckoning, 1.5× (ML+estimation) |
 | 17 | online: fixed-lag vs batch | O(1)/step vs O(N) — speed/consistency tradeoff |
 | 18 | **full SLAM system** | fixed-lag front-end + robust global back-end, 6× (integration) |
+| 19 | planning (A*) + control (pure-pursuit) | reach goal, avoid no-go zone (estimation→action) |
 
 ## Experiments
 
@@ -383,6 +384,19 @@ loop-closure detection — correcting the whole trajectory and rejecting false c
 
 ![full system](assets/18_full_slam_system.png)
 
+### 19. Beyond estimation — planning + control (`scripts/19_plan_control.py`)
+Localization answers *"where am I?"*; to be useful a robot must also *get somewhere*. This
+adds the next two layers of the stack on top of the estimator: **A\* path planning** +
+**pure-pursuit control** driving a unicycle robot to a goal through a cluttered map — while
+respecting a **no-go zone** (a sensitive instrument, the lab/medical-safety analog).
+
+- Robot reaches the goal, min **no-go-zone clearance 1.9 m** (never violates), 59 m driven.
+- A\* on an inflated occupancy grid (robot radius) + smooth pure-pursuit tracking.
+- Closes the robotics loop **estimation → planning → control** — and the no-go zone ties
+  back to the uncertainty-aware safety theme (experiment 9).
+
+![plan control](assets/19_plan_control.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -412,6 +426,7 @@ python scripts/15_robust_g2o.py      # robust SLAM on real Intel + false loop cl
 python scripts/16_learned_imu_frontend.py  # learned IMU denoiser (torch, optional)
 python scripts/17_fixed_lag_slam.py   # online SLAM: fixed-lag vs batch
 python scripts/18_full_slam_system.py # full system: front-end + robust back-end
+python scripts/19_plan_control.py     # planning (A*) + control (pure-pursuit)
 pytest -q
 ```
 
@@ -441,6 +456,7 @@ scripts/
   16_learned_imu_frontend.py  learned 1D-CNN IMU denoiser front-end (ML+estimation)
   17_fixed_lag_slam.py   online SLAM: fixed-lag smoother vs full batch (speed/consistency)
   18_full_slam_system.py  integrated: fixed-lag front-end + robust global back-end
+  19_plan_control.py     beyond estimation: A* planning + pure-pursuit control (nav)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
