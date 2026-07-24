@@ -23,10 +23,10 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-24 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+27 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
-medical application → full LiDAR SLAM & MPC.**
+medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -52,6 +52,9 @@ medical application → full LiDAR SLAM & MPC.**
 | 22 | **surgical tremor cancellation** (medical) | adaptive FLC **10.7×** tremor suppression, 37 µm tracking |
 | 23 | **full 2D LiDAR SLAM** (ICP + pose-graph) | 43 loop closures, drift **3.3×** (0.89 → 0.27 m) |
 | 24 | model-predictive control (MPC) tracking | **3×** tighter than pure-pursuit, respects actuator limits |
+| 25 | occupancy-grid mapping (scan-to-map) | log-odds ray-cast map, IoU **0.72**; scan-to-map sharpens noisy poses |
+| 26 | obstacle-avoiding MPC | avoids (clearance +0.46 m) where plain MPC collides (−0.85 m) |
+| 27 | **gait-phase estimation** (rehab exo, medical) | stance **96%**, ZUPT stride **~41×** over naive integration |
 
 ## Experiments
 
@@ -508,6 +511,65 @@ the reference into a condensed convex QP; the baseline is exp 19-style pure-purs
 
 ![mpc](assets/24_mpc_tracking.png)
 
+### 25. Occupancy-grid mapping (scan-to-map) (`scripts/25_occupancy_mapping.py`)
+The "mapping" half of SLAM, complementing exp 23 (which recovers only the trajectory). Given robot poses
+and LiDAR scans, this builds a probabilistic **occupancy grid** with **log-odds ray casting**: for every
+scan point a ray is cast from the robot to the hit — cells the ray passes through get a negative (free)
+update, the hit cell a positive (occupied) update (vectorized DDA at grid resolution). Log-odds convert to
+probability (`p = 1/(1+e⁻ˡ)`) for a grayscale map; over two laps repeated noisy observations sharpen walls
+and pillars. When poses are noisy, an optional **scan-to-map** step aligns each new scan (ICP against the
+current map's occupied-cell cloud) before integrating.
+
+| map | occupied IoU | pose RMSE |
+|--|----------:|---------:|
+| true-pose (upper bound) | **0.72** | — |
+| noisy-pose naive | 0.13 | 0.45 m |
+| **noisy-pose scan-to-map** | **0.18** | **0.35 m** |
+
+- Occupied-cell IoU vs truth **0.72** (1-cell tolerance, observed cells only — occlusion gaps excluded
+  honestly). Scan-to-map refinement lifts the noisy-pose map IoU 0.13 → 0.18 and pose RMSE 0.45 → 0.35 m.
+- Honest limits: thin walls (1–2 cells) and occlusion leave faint/hollow pillars; naive noisy poses
+  double-print the boundary.
+
+![occupancy](assets/25_occupancy_mapping.png)
+
+### 26. Obstacle-avoiding MPC (`scripts/26_mpc_obstacle.py`)
+Unifies exp 24 (MPC tracking) and exp 20 (reactive avoidance) into one optimizer: the MPC horizon cost
+gains a **collision-avoidance term** so the robot tracks its reference while staying outside a safety
+radius around each obstacle. The unicycle is rolled out **fully nonlinearly** (accurate even during large
+swerves) and avoidance is a **smooth soft barrier** `½·β·max(0, margin − clearance)²` added to the
+tracking/effort cost, solved with L-BFGS-B (analytic adjoint gradient) under `|v|,|w|` box + acceleration
+bounds. Moving obstacles are predicted forward over the horizon. Same scenario, two controllers:
+obstacle-**unaware** MPC (exp 24, β=0) vs obstacle-**aware** MPC, with obstacles placed **on** the figure-8.
+
+| controller | min clearance | outcome | off-obstacle RMSE | limits |
+|--|----------:|:--|----------:|:--|
+| plain MPC (unaware, exp 24) | **−0.85 m** | collides (drives through all 3) | — | ok |
+| **obstacle-aware MPC** | **+0.46 m** | avoids, returns to path | 0.087 m | ok (`|v|≤2.6, |w|≤1.5`) |
+
+- Soft (not hard) constraints: always feasible and smooth, but *attract* rather than *guarantee* clearance
+  (tuned by β); as a local optimizer it commits to one side without global reasoning — the honest tradeoff.
+
+![mpc obstacle](assets/26_mpc_obstacle.png)
+
+### 27. Gait-phase estimation for a rehab exoskeleton (medical) (`scripts/27_gait_estimation.py`)
+A rehabilitation exoskeleton must know *where in the gait cycle* the wearer is — stance vs swing, and the
+heel-strike / toe-off instants — to time its assistive torque; mistimed assistance fights the wearer and
+raises fall risk. From a single foot-mounted IMU (gyro + accel, 200 Hz, bias + noise) this (1) detects
+stance with a **zero-velocity / low-angular-rate detector** (SHOE-style: gyro magnitude + gravity
+deviation), extracting heel-strike and toe-off events, and (2) estimates stride length by **ZUPT-aided**
+integration — integrating acceleration to velocity, resetting to zero at each stance, then integrating to
+distance — versus naive double integration.
+
+- **Stance/swing classification 96.1%**; gait-event timing error **22.5 ms** mean (all events detected).
+- **ZUPT stride error 2.2 cm vs naive 90 cm** on a 70 cm stride — **~41×** better; naive drifts
+  quadratically as accelerometer bias accumulates. This is the wearable/rehab counterpart of the repo's
+  IMU-bias (exp 4) and safe-autonomy (exp 9) medical themes.
+- Honest limits: synthetic gait simplifies inter-subject variability, pathological gait, and
+  sensor-alignment error.
+
+![gait](assets/27_gait_estimation.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -543,6 +605,9 @@ python scripts/21_icp_scan_matching.py  # ICP scan-matching LiDAR odometry
 python scripts/22_surgical_tremor.py  # surgical tremor cancellation (medical)
 python scripts/23_lidar_slam.py       # full 2D LiDAR SLAM (ICP + pose-graph)
 python scripts/24_mpc_tracking.py     # MPC trajectory tracking vs pure-pursuit
+python scripts/25_occupancy_mapping.py  # occupancy-grid mapping (scan-to-map)
+python scripts/26_mpc_obstacle.py     # obstacle-avoiding MPC
+python scripts/27_gait_estimation.py  # gait-phase estimation (rehab exoskeleton)
 pytest -q
 ```
 
@@ -578,6 +643,9 @@ scripts/
   22_surgical_tremor.py  surgical physiological-tremor cancellation (medical; DSP+estimation)
   23_lidar_slam.py       full 2D LiDAR SLAM: ICP front-end + pose-graph back-end + loop closure
   24_mpc_tracking.py     model-predictive control trajectory tracking vs pure-pursuit
+  25_occupancy_mapping.py  occupancy-grid mapping: log-odds ray casting + scan-to-map
+  26_mpc_obstacle.py     obstacle-avoiding MPC (soft-barrier collision avoidance)
+  27_gait_estimation.py  gait-phase estimation for a rehab exoskeleton (IMU + ZUPT)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -607,6 +675,9 @@ tests/
 - [x] Full 2D LiDAR SLAM: ICP scan-matching front-end + pose-graph back-end + loop closure
 - [x] Model-predictive control (MPC) trajectory tracking (vs pure-pursuit, actuator limits)
 - [x] Interactive in-browser demos (pose-graph SLAM, surgical-tremor cancellation)
+- [x] Occupancy-grid mapping (log-odds ray casting + scan-to-map refinement)
+- [x] Obstacle-avoiding MPC (soft-barrier collision avoidance, moving obstacles)
+- [x] Wearable/rehab: gait-phase estimation + ZUPT stride length (foot IMU)
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
