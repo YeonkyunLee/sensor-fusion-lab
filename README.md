@@ -28,11 +28,12 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-33 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+36 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
-→ a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL.**
+→ a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
+→ synthetic data & auto-labeling → incremental smoothing → particle-filter localization.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -67,6 +68,9 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 31 | SimOpt — closing the sim-to-real loop | system-ID loop cuts param error **93%**, real balancing 71 → **200** |
 | 32 | reward design & reward hacking | shaped **0.76** vs sparse 0.35 success; hacked reward high but **0.00** solved |
 | 33 | **residual RL** (classical base + learned) | base+residual cost **24×**, steady-state error **120×**, learns safer |
+| 34 | synthetic data & **auto-labeling** (sim-to-real) | synth+DR **1.89 px** beats no-DR 6.94 & scarce-real 2.12 |
+| 35 | incremental smoothing (**iSAM**-style) | near-batch RMSE (1.16×) at **3.7× less** compute |
+| 36 | **Monte Carlo Localization** (particle filter) | **11.9×** over odometry; global/kidnapped, ring posterior |
 
 ## Experiments
 
@@ -712,6 +716,73 @@ learn-from-scratch (no base), and **base + residual** (`u = u_base(s) + clip(w·
 
 ![residual rl](assets/33_residual_rl.png)
 
+### 34. Synthetic data & auto-labeling for sim-to-real (`scripts/34_synthetic_labeling.py`)
+Sim-to-real perception works because a simulator produces **unlimited, perfectly-labeled** data for free — you
+*place* the object, so its position **is** the label (automatic labeling, no hand-annotation, no label noise).
+But a simulator rendered at one nominal look overfits; **domain randomization** — randomizing the *look*
+(background brightness/gradient, object contrast/size, viewpoint shear, noise) while keeping the free labels —
+is what makes those synthetic labels transfer. Task: 2D localization of a blob in a 24×24 image. Same pure-numpy
+**ridge regressor** trained on three regimes, all evaluated on a shifted "real" test set (some samples beyond the
+DR range, for honesty).
+
+| training regime | images | labels | "real" test RMSE [px] |
+|--|--:|--|----------:|
+| scarce real | 40 | hand-labeled (expensive) | 2.12 |
+| synthetic, no-DR | 800 | auto (free) | 6.94 (overfits clean look) |
+| **synthetic + DR** | 800 | auto (free) | **1.89** |
+| synth+DR + real fine-tune | 800 + 40 | mixed | 1.86 |
+
+- Free auto-labels alone aren't enough: synthetic no-DR collapses on shifted "real" (6.94 px). **Domain
+  randomization is the piece that makes free labels transfer** — beating both no-DR and the expensive scarce-real
+  model. Honest: a little real fine-tuning on top is usually best; synthetic *saves* the label budget, doesn't
+  replace real data. Ties to the data-labeling bottleneck behind the whole sim-to-real trend.
+
+![synthetic labeling](assets/34_synthetic_labeling.png)
+
+### 35. Incremental smoothing (iSAM-style) (`scripts/35_incremental_smoothing.py`)
+Re-solving the whole pose graph from scratch on every new measurement is wasteful: per-step cost grows O(N) and
+most past poses barely move. **Incremental smoothing (iSAM)** updates only the variables a new factor actually
+affects and relinearizes on demand — odometry touches a short recent window, a loop closure re-solves just the
+span it connects. Closes the roadmap's incremental-factorization item. Three online strategies over a 3-lap SE(2)
+trajectory (165 odometry + 23 loop-closure edges):
+
+| strategy | final RMSE | cumulative compute (proxy) | per-step cost |
+|--|----------:|----------:|:--|
+| full batch (re-solve every step) | **0.221 m** | 61,398 | O(N), grows |
+| **incremental (iSAM-style)** | **0.256 m** | **16,773** | bounded (spikes on loop closure) |
+| naive warm-start only | 4.925 m | 564 | O(1), but drifts |
+
+- Incremental matches batch to within **0.035 m (1.16×)** at **3.7× less** cumulative compute, while naive
+  warm-start (never back-propagating closures) blows up 22×. Honest: true iSAM keeps a square-root factor in a
+  Bayes tree with local Givens updates; here the affected clique is re-solved with sparse Gauss-Newton
+  (relinearize-on-demand) — the essence, with the local factor update approximated.
+
+![incremental](assets/35_incremental_smoothing.png)
+
+### 36. Monte Carlo Localization (particle filter) (`scripts/36_particle_filter.py`)
+The first **nonparametric** filter in the repo: instead of one Gaussian pose (KF/EKF/UKF), MCL represents the
+belief as a cloud of **weighted particles**, so it handles **non-Gaussian, multimodal** uncertainty the (E)KF
+fundamentally can't. Localization on a known landmark map with **range-only** measurements (deliberately chosen:
+a single range is a *ring*, so the posterior is genuinely multimodal). One step: propagate particles through the
+motion model → weight by measurement likelihood → **systematic resampling** (with a roughening floor against
+depletion) → weighted-mean estimate. Also demonstrates **global / kidnapped-robot** localization from a map-wide
+uniform prior.
+
+| method (range-only) | trajectory RMSE ↓ | needs initial pose? | multimodal belief? |
+|--|----------:|:--:|:--:|
+| odometry only (dead reckoning) | 2.53 m | yes | — |
+| EKF (correct init) | 0.51 m | **yes** | no (single Gaussian) |
+| **MCL (tracking)** | **0.21 m** | approx. | **yes** |
+| **MCL (global / kidnapped)** | 0.43 m (after conv.) | **no** | **yes** |
+
+- MCL tracking is **11.9×** better than dead-reckoning; global localization converges from map-wide ambiguity to
+  <3 m in **8 steps** with no initial pose. Honest contrast: with a prior the **EKF tracks range-only fine too** —
+  the PF's real edge is representing beliefs a Gaussian can't (a single range → ring-shaped posterior; the EKF
+  dumps its mass in the empty ring center). Tradeoffs: cost scales with particle count; depletion needs handling;
+  curse of dimensionality in high-D states.
+
+![particle filter](assets/36_particle_filter.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -756,6 +827,9 @@ python scripts/30_domain_randomization.py  # domain randomization (sim-to-real)
 python scripts/31_simopt_loop.py      # SimOpt: closing the sim-to-real loop
 python scripts/32_reward_shaping.py   # reward design & reward hacking
 python scripts/33_residual_rl.py      # residual RL: classical base + learned correction
+python scripts/34_synthetic_labeling.py  # synthetic data & auto-labeling (sim-to-real)
+python scripts/35_incremental_smoothing.py  # incremental smoothing (iSAM-style)
+python scripts/36_particle_filter.py  # Monte Carlo Localization (particle filter)
 pytest -q
 ```
 
@@ -800,6 +874,9 @@ scripts/
   31_simopt_loop.py      SimOpt: system-ID loop closing the sim-to-real gap
   32_reward_shaping.py   reward design & reward hacking (pendulum swing-up)
   33_residual_rl.py      residual RL: classical LQR base + learned CEM correction
+  34_synthetic_labeling.py  synthetic data & auto-labeling for sim-to-real perception
+  35_incremental_smoothing.py  incremental smoothing (iSAM-style) vs batch
+  36_particle_filter.py  Monte Carlo Localization (nonparametric, range-only)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -837,7 +914,9 @@ tests/
 - [x] Learning-based control & sim-to-real: domain randomization, SimOpt loop, reward design
 - [x] Residual RL: classical base controller + learned correction (model-based + learning hybrid)
 - [x] Three interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real)
-- [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
+- [x] Synthetic data & auto-labeling for sim-to-real perception (domain randomization on labels)
+- [x] Incremental smoothing (iSAM-style): relinearize-on-demand, near-batch at a fraction of compute
+- [x] Monte Carlo Localization (particle filter): nonparametric, multimodal, global/kidnapped
 - [ ] ROS2 node wrapping the filter
 
 ## License
