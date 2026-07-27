@@ -878,9 +878,37 @@ scripts/
   35_incremental_smoothing.py  incremental smoothing (iSAM-style) vs batch
   36_particle_filter.py  Monte Carlo Localization (nonparametric, range-only)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
+ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
+
+## ROS2 integration (`ros2/kalman_fusion/`)
+
+A real, `colcon`-buildable ROS2 (ament_python) package that wraps the linear Kalman filter as a node —
+fusing a position sensor with an IMU into a published state estimate (the same idea as
+`scripts/02_imu_fusion.py`, packaged for a robot middleware).
+
+**ROS-free core.** The estimation lives in `kalman_fusion/fusion_core.py` (`FusionCore`) — pure Python +
+NumPy, **no `rclpy`**. The node (`fusion_node.py`) imports `rclpy` and the message types behind a guard, so
+the module imports (and the core is unit-testable) on a machine with **no ROS2 installed**.
+
+| dir | topic | type | meaning |
+|-----|-------|------|---------|
+| sub | `/position` | `geometry_msgs/PointStamped` | noisy position fix (GPS-like) |
+| sub | `/imu` | `sensor_msgs/Imu` | linear acceleration |
+| pub | `/fused_odom` | `nav_msgs/Odometry` | fused pose (x,y) + twist (vx,vy) |
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --packages-select kalman_fusion && source install/setup.bash
+ros2 run kalman_fusion fusion_node          # or: ros2 launch kalman_fusion fusion.launch.py
+```
+
+**Honest note.** The estimation core is CI-tested headless (`tests/test_ros2_core.py`: fuses a simulated
+position+IMU sequence with a sensor outage, beats the raw measurements, and confirms `fusion_node` imports
+without `rclpy`). A full end-to-end ROS2 spin needs an actual ROS2 (Humble/Jazzy) install — the build/run path
+above is documented, not faked.
 
 ## Roadmap
 - [x] Linear KF, CV tracking, position+IMU fusion, outage robustness
@@ -917,7 +945,7 @@ tests/
 - [x] Synthetic data & auto-labeling for sim-to-real perception (domain randomization on labels)
 - [x] Incremental smoothing (iSAM-style): relinearize-on-demand, near-batch at a fraction of compute
 - [x] Monte Carlo Localization (particle filter): nonparametric, multimodal, global/kidnapped
-- [ ] ROS2 node wrapping the filter
+- [x] ROS2 node wrapping the filter (`ros2/kalman_fusion/` — ROS-free testable core + rclpy-guarded node)
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
