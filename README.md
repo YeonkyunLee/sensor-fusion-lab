@@ -32,13 +32,13 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-37 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+38 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
 → a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
 → synthetic data & auto-labeling → incremental smoothing → particle-filter localization
-→ an error-state KF.**
+→ an error-state KF → model-based RL.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -77,6 +77,7 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 35 | incremental smoothing (**iSAM**-style) | near-batch RMSE (1.16×) at **3.7× less** compute |
 | 36 | **Monte Carlo Localization** (particle filter) | **11.9×** over odometry; global/kidnapped, ring posterior |
 | 37 | **error-state KF** (ESKF) for attitude | gyro-only 28.5° → ESKF **0.48°** (60×), bias estimated online |
+| 38 | **model-based RL** (learned dynamics + MPC) | 98% of oracle at 480 transitions; **~473×** more data-efficient than model-free |
 
 ## Experiments
 
@@ -810,6 +811,28 @@ only ever handles small, well-linearized quantities (no quaternion-norm constrai
 
 ![eskf](assets/37_error_state_kf.png)
 
+### 38. Model-based RL — learn a dynamics model, plan with MPC (`scripts/38_model_based_rl.py`)
+The "learn a model, then plan" paradigm behind modern MBRL (PETS/Dreamer), at an honest toy scale. On a
+cart-pole whose dynamics the agent does **not** know, we fit a dynamics model `f_hat: (state, action) → Δstate`
+(random-Fourier-features + ridge, numpy only) from collected transitions, then control by planning action
+sequences with receding-horizon MPC (CEM / random-shooting) **over the learned model** — planning is free, so
+the environment-interaction budget is spent only on learning the model. Compared, as a function of environment
+transitions, against a model-free CEM policy-search baseline (same budget) and an oracle MPC on the true model.
+
+| method | return @ 480 transitions | % of oracle | transitions to "solve" (90% of oracle) |
+|--|----------:|----------:|----------:|
+| oracle MPC (true model, upper bound) | 0.920 | 100% | — |
+| **MBRL (learn model + MPC)** | **0.902** | **98%** | **30** |
+| model-free CEM (same budget) | 0.105 | 11% | 14,198 (**~473×** more data) |
+
+- The sample-efficiency story: MBRL reaches oracle-level control from a handful of transitions where model-free
+  needs orders of magnitude more data. Model quality is what enables it — one-step prediction L2 ≈ 0.0006, but
+  error compounds to ≈0.92 by 40 steps, so short-horizon replanning is what tolerates the model bias, and MBRL
+  plateaus just below the oracle. Honest: given far more data, model-free eventually catches up — the point is
+  data efficiency, not impossibility.
+
+![mbrl](assets/38_model_based_rl.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -858,6 +881,7 @@ python scripts/34_synthetic_labeling.py  # synthetic data & auto-labeling (sim-t
 python scripts/35_incremental_smoothing.py  # incremental smoothing (iSAM-style)
 python scripts/36_particle_filter.py  # Monte Carlo Localization (particle filter)
 python scripts/37_error_state_kf.py   # error-state KF (ESKF) for attitude
+python scripts/38_model_based_rl.py   # model-based RL (learned dynamics + MPC)
 pytest -q
 ```
 
@@ -906,8 +930,10 @@ scripts/
   35_incremental_smoothing.py  incremental smoothing (iSAM-style) vs batch
   36_particle_filter.py  Monte Carlo Localization (nonparametric, range-only)
   37_error_state_kf.py   error-state KF (ESKF) for 3D attitude (gyro+accel+mag)
+  38_model_based_rl.py   model-based RL: learned dynamics model + MPC planning
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
+ros2/kalman_fusion_sim/        Gazebo sim front-end + no-Gazebo mock driver (feeds the fusion node)
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
 ```
@@ -938,6 +964,24 @@ ros2 run kalman_fusion fusion_node          # or: ros2 launch kalman_fusion fusi
 position+IMU sequence with a sensor outage, beats the raw measurements, and confirms `fusion_node` imports
 without `rclpy`). A full end-to-end ROS2 spin needs an actual ROS2 (Humble/Jazzy) install — the build/run path
 above is documented, not faked.
+
+## Gazebo simulation (`ros2/kalman_fusion_sim/`)
+
+A simulation front-end that produces the sensor topics the `kalman_fusion` node consumes, two ways (the
+estimation is unchanged — this package only *drives* it):
+
+- **Run path A — full Gazebo** (needs Gazebo Harmonic/Ionic + ROS2 with `ros_gz_sim`/`ros_gz_bridge`): a modern
+  **gz sim** world (`worlds/fusion_world.sdf`) with a differential-drive robot carrying an **IMU** + odometry
+  publisher; `ros_gz_bridge` maps the gz topics into ROS2 and a small relay converts odometry into the
+  `/position` the fusion node expects. `ros2 launch kalman_fusion_sim sim_fusion.launch.py`.
+- **Run path B — no-Gazebo mock** (needs only ROS2): a pure-Python synthetic sensor source replayed onto `/imu`
+  + `/position`, so the pipeline runs with just `rclpy`. `ros2 run kalman_fusion_sim mock_driver`.
+
+**Honest CI note.** The mock sensor core and the sim→fusion contract are CI-tested headless
+(`tests/test_gazebo_mock.py`: feeds `MockSensorSource` into `FusionCore`, asserts the fused estimate beats the
+raw noisy position through a sensor outage, and that the sim nodes import without `rclpy`). The full Gazebo path
+is **not** run in CI — it needs a real Gazebo + ROS2 install; the SDF/bridge/launch files are validated only for
+well-formedness.
 
 ## Roadmap
 - [x] Linear KF, CV tracking, position+IMU fusion, outage robustness
@@ -977,6 +1021,8 @@ above is documented, not faked.
 - [x] Incremental smoothing (iSAM-style): relinearize-on-demand, near-batch at a fraction of compute
 - [x] Monte Carlo Localization (particle filter): nonparametric, multimodal, global/kidnapped
 - [x] ROS2 node wrapping the filter (`ros2/kalman_fusion/` — ROS-free testable core + rclpy-guarded node)
+- [x] Gazebo simulation front-end (`ros2/kalman_fusion_sim/` — gz sim world + no-Gazebo mock driver)
+- [x] Model-based RL: learned dynamics model + MPC planning (sample-efficiency vs model-free)
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.

@@ -1,0 +1,33 @@
+# ros_gz_bridge configuration: gz sim topics  <->  ROS2 topics.
+#
+# Used by run path A (full Gazebo). Consumed via:
+#   ros2 run ros_gz_bridge parameter_bridge \
+#     --ros-args -p config_file:=<this file>
+#
+# NOTE on /position: the gz OdometryPublisher emits gz.msgs.Odometry, and
+# ros_gz_bridge maps that only to nav_msgs/msg/Odometry (there is no
+# gz -> geometry_msgs/PointStamped converter). So we bridge odometry to ROS
+# /odom, and a tiny relay (kalman_fusion_sim odom_to_position) republishes the
+# pose translation as the geometry_msgs/PointStamped /position the fusion node
+# subscribes to. The launch file wires that relay up automatically.
+
+# IMU: gz.msgs.IMU  ->  sensor_msgs/msg/Imu  (direct, this is /imu the node wants)
+- ros_topic_name: "/imu"
+  gz_topic_name: "/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+# Odometry: gz.msgs.Odometry  ->  nav_msgs/msg/Odometry
+- ros_topic_name: "/odom"
+  gz_topic_name: "/model/fusion_bot/odometry"
+  ros_type_name: "nav_msgs/msg/Odometry"
+  gz_type_name: "gz.msgs.Odometry"
+  direction: GZ_TO_ROS
+
+# cmd_vel: geometry_msgs/msg/Twist  ->  gz.msgs.Twist  (drive the robot from ROS)
+- ros_topic_name: "/cmd_vel"
+  gz_topic_name: "/model/fusion_bot/cmd_vel"
+  ros_type_name: "geometry_msgs/msg/Twist"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>kalman_fusion_sim</name>
+  <version>0.1.0</version>
+  <description>
+    Gazebo (gz sim, Harmonic/Ionic) simulation for the kalman_fusion node: a
+    simple differential-drive robot carrying an IMU and a pose/odometry sensor,
+    bridged to ROS2 via ros_gz_bridge so its data flows into the fusion node.
+    Ships a pure-Python, ROS-free mock sensor source (MockSensorSource) plus a
+    thin driver node so the whole sim -> fusion pipeline is demonstrable and
+    CI-testable WITHOUT Gazebo installed.
+  </description>
+  <maintainer email="dev@example.com">sensor-fusion-lab</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>kalman_fusion</exec_depend>
+
+  <!-- Gazebo path only (run path A): bridge gz sim topics <-> ROS2 topics. -->
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
