@@ -23,11 +23,11 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-29 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+32 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
-→ a navigation capstone & 3D LiDAR SLAM.**
+→ a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -58,6 +58,9 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 27 | **gait-phase estimation** (rehab exo, medical) | stance **96%**, ZUPT stride **~41×** over naive integration |
 | 28 | **navigation capstone** (A* + obstacle-MPC) | reaches goal past moving obstacles (+0.62 m) where plain tracker collides |
 | 29 | **3D LiDAR SLAM** (point-to-plane ICP + SE(3)) | 62 loop closures, 3D drift **2.0×** (0.33 → 0.17 m) |
+| 30 | domain randomization (sim-to-real) | robust off-nominal success 0.11 → **0.55** (trades peak for robustness) |
+| 31 | SimOpt — closing the sim-to-real loop | system-ID loop cuts param error **93%**, real balancing 71 → **200** |
+| 32 | reward design & reward hacking | shaped **0.76** vs sparse 0.35 success; hacked reward high but **0.00** solved |
 
 ## Experiments
 
@@ -615,6 +618,72 @@ observable, so point-to-plane converges fast.
 
 ![lidar slam 3d](assets/29_lidar_slam_3d.png)
 
+## Learning-based control & sim-to-real
+
+Everything above is **model-based** (KF/graph SLAM/MPC — derived, interpretable, verifiable). This block is the
+complementary **learning-based** axis: policies trained by search (CEM, numpy-only — no torch/gym) in
+simulation, and the sim-to-real techniques that make learned control transfer. The point is honest
+understanding of *why* the current sim-to-real / RL trend works — and where it breaks — not a claim that
+learning replaces the classical stack. In safety-critical/medical robotics the verifiable stack above is the
+one that ships; this block shows I understand both sides.
+
+### 30. Domain randomization for sim-to-real (`scripts/30_domain_randomization.py`)
+A control policy trained only on nominal ("sim") dynamics overfits and breaks when the real world shifts;
+**domain randomization (DR)** — randomizing physical parameters every training episode — trades a little peak
+performance for far wider robustness. Task: cart-pole balancing (ODE from scratch). Policy: a 4-weight linear
+state-feedback law trained by the **cross-entropy method (CEM)**. Two regimes: nominal-only vs DR (samples
+pole mass/length, cart mass, control latency per episode). Both evaluated on a grid of shifted "real" worlds,
+including latencies **outside** the DR range to be honest about extrapolation.
+
+| policy | at nominal (sim) | shifted-grid success | learned θ-gain |
+|--|----------:|----------:|:--|
+| nominal-only | 1.00 | 0.106 | ≈ 80 (aggressive, fragile) |
+| **domain-randomized** | 1.00 | **0.554** | ≈ 35 (conservative, robust) |
+
+- The honest crossover: nominal-only is perfect at zero-latency sim but collapses the moment actuation delay
+  appears; DR holds success across a much wider band — yet DR too fails deep outside its training range
+  (latency ≥ 8 steps). Robustness is bought by giving up peak tightness — exactly the DR tradeoff.
+
+![domain randomization](assets/30_domain_randomization.png)
+
+### 31. SimOpt — closing the sim-to-real loop (`scripts/31_simopt_loop.py`)
+A policy trained in a **miscalibrated simulator** fails on the "real" plant. Instead of hand-tuning the sim,
+**close the loop**: act in real → collect rollouts → **fit the sim's physical parameters** to those rollouts
+(system identification) → retrain the policy in the corrected sim → repeat (Chebotar 2019, *Closing the
+Sim-to-Real Loop*). Plant: cart-pole with hidden true pole mass/length `(0.50, 1.00)`; the sim starts wrong
+at `(0.10, 0.30)` — same model structure, only the parameters wrong. Policy: linear feedback via CEM.
+
+| SimOpt iteration | param error | real balancing [steps] |
+|--|----------:|----------:|
+| 0 (initial, bad sim) | 0.752 | 71 (falls) |
+| 5 (final) | **0.053** | **200** (balances) |
+| no-loop baseline | 0.752 (fixed) | 71 (fixed) |
+
+- Sim params converge to reality (error **93% ↓**) and real-world balancing goes **71 → 200 / 200** steps,
+  while the no-loop policy stays stuck. This is the "act → feedback → fix the sim → retrain" loop concretely.
+- Honest limits: system ID needs informative excitation (a probe force is injected); unobservable params
+  won't converge, and observation noise biases a single fit (hence data accumulation across iterations).
+
+![simopt](assets/31_simopt_loop.png)
+
+### 32. Reward design & reward hacking (`scripts/32_reward_shaping.py`)
+In RL the hard part is usually not the optimizer — it's the **reward**. Same pendulum swing-up task, same
+optimizer (CEM), three reward designs; success scored by a **reward-independent** metric (fraction of the last
+steps held upright *and* slow). The pole starts hanging down and torque is limited below gravity torque, so
+the controller must pump energy — making reward shaping matter.
+
+| reward design | what it says | true-task success (5 seeds) | outcome |
+|--|--|----------:|--|
+| sparse | `+1` only near the top | 0.35 | no gradient → learns poorly, high variance |
+| **shaped (good)** | `−(θ² + 0.1·θ̇² + …)` | **0.76** | reliably swings up **and holds** |
+| mis-shaped (hackable) | reward `θ̇²` ("be energetic") | **0.00** | high reward, task **not** solved |
+
+- Only the reward changes, yet shaped clearly beats sparse (0.76 vs 0.35). The "be energetic" reward is
+  **hacked** — the policy spins the pole forever, earning **70% of the max possible reward** while achieving
+  **0.00** true success. High training reward ≠ task solved — exactly why reward engineering is the hard part.
+
+![reward shaping](assets/32_reward_shaping.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -655,6 +724,9 @@ python scripts/26_mpc_obstacle.py     # obstacle-avoiding MPC
 python scripts/27_gait_estimation.py  # gait-phase estimation (rehab exoskeleton)
 python scripts/28_full_navigation.py  # navigation capstone: A* + obstacle-aware MPC
 python scripts/29_lidar_slam_3d.py    # 3D LiDAR SLAM (point-to-plane ICP + SE(3))
+python scripts/30_domain_randomization.py  # domain randomization (sim-to-real)
+python scripts/31_simopt_loop.py      # SimOpt: closing the sim-to-real loop
+python scripts/32_reward_shaping.py   # reward design & reward hacking
 pytest -q
 ```
 
@@ -695,6 +767,9 @@ scripts/
   27_gait_estimation.py  gait-phase estimation for a rehab exoskeleton (IMU + ZUPT)
   28_full_navigation.py  navigation capstone: A* global + obstacle-aware MPC local
   29_lidar_slam_3d.py    3D LiDAR SLAM: point-to-plane ICP + SE(3) pose-graph
+  30_domain_randomization.py  domain randomization for sim-to-real (CEM policy search)
+  31_simopt_loop.py      SimOpt: system-ID loop closing the sim-to-real gap
+  32_reward_shaping.py   reward design & reward hacking (pendulum swing-up)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -729,6 +804,7 @@ tests/
 - [x] Wearable/rehab: gait-phase estimation + ZUPT stride length (foot IMU)
 - [x] Navigation capstone: A* global plan + obstacle-aware MPC local (dynamic world)
 - [x] 3D LiDAR SLAM: point-to-plane ICP front-end + SE(3) pose-graph back-end
+- [x] Learning-based control & sim-to-real: domain randomization, SimOpt loop, reward design
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
