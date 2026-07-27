@@ -1,0 +1,380 @@
+---
+layout: none
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive Domain Randomization (Sim-to-Real) — sensor-fusion-lab</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --nom:#f85149; --dr:#3fb950; --rail:#30363d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; max-width:860px; }
+  header a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; flex-wrap:wrap; gap:18px; padding:18px 22px; }
+  .stage { flex:1 1 560px; min-width:320px; }
+  canvas { width:100%; background:#0a0e14; border:1px solid #30363d; border-radius:10px; display:block; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; }
+  .panel { flex:0 0 280px; background:var(--panel); border:1px solid #30363d; border-radius:10px; padding:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  button { width:100%; padding:10px; margin:6px 0; border:1px solid #30363d; border-radius:8px; background:#21262d; color:var(--fg); font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0d1117; font-weight:600; border-color:var(--accent); }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  label b { color:var(--fg); }
+  input[type=range] { width:100%; }
+  .legend { font-size:13px; line-height:1.9; margin-top:12px; }
+  .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  .stat { font-size:13px; color:var(--muted); margin-top:12px; padding-top:12px; border-top:1px solid #30363d; line-height:1.7; }
+  .stat b { color:var(--fg); }
+  .shiftbar { margin-top:12px; }
+  .shiftbar .track { height:8px; border-radius:4px; background:#21262d; overflow:hidden; margin-top:4px; }
+  .shiftbar .fill { height:100%; width:0%; background:linear-gradient(90deg,#3fb950,#d29922,#f85149); transition:width .12s linear; }
+  .warn { color:#d29922; font-size:12px; margin-top:8px; min-height:16px; }
+  .note { color:var(--muted); font-size:11px; margin-top:12px; padding-top:10px; border-top:1px solid #30363d; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎲 Interactive Domain Randomization — sim-to-real</h1>
+  <p>Two cart-poles balance under the <b>same "real" world</b>. The <b style="color:var(--nom)">left</b> uses a
+     policy tuned only on the nominal simulator (aggressive, high-gain); the <b style="color:var(--dr)">right</b> uses a
+     domain-randomized policy trained across a <i>family</i> of worlds (conservative, robust). Drag the sliders to shift
+     the real dynamics — pole length, pole mass, control latency, sensor noise — away from nominal. At nominal both
+     balance; as you shift, the nominal-only cart destabilizes and falls while the DR cart keeps balancing. Policies and
+     cart-pole dynamics run live in your browser, no libraries.
+     From <a href="https://github.com/YeonkyunLee/sensor-fusion-lab">sensor-fusion-lab</a>.</p>
+</header>
+<div class="wrap">
+  <div class="stage">
+    <canvas id="cv" width="900" height="520"></canvas>
+    <div class="hint">Both carts start from the identical tilt each round — the only difference is the control policy. Falls auto-reset after a beat.</div>
+  </div>
+  <div class="panel">
+    <h2>Shift the "real" world</h2>
+    <label>Pole length <b id="lenVal"></b> <span style="color:#6e7681">(nominal 0.50 m)</span></label>
+    <input type="range" id="len" min="35" max="100" value="50">
+    <label>Pole mass <b id="massVal"></b> <span style="color:#6e7681">(nominal 0.10 kg)</span></label>
+    <input type="range" id="mass" min="5" max="60" value="10">
+    <label>Control latency <b id="latVal"></b> <span style="color:#6e7681">(nominal 0)</span></label>
+    <input type="range" id="lat" min="0" max="9" value="0">
+    <label>Sensor noise <b id="noiseVal"></b> <span style="color:#6e7681">(nominal 0)</span></label>
+    <input type="range" id="noise" min="0" max="50" value="0">
+    <button id="perturb" class="primary">🎲 Perturb the world</button>
+    <button id="reset">↺ Reset to nominal</button>
+    <div class="shiftbar">
+      <label style="margin:0">Shift from nominal <b id="shiftVal">0%</b></label>
+      <div class="track"><div class="fill" id="shiftFill"></div></div>
+      <div class="warn" id="warn"></div>
+    </div>
+    <div class="legend">
+      <div><span class="dot" style="background:var(--nom)"></span>nominal-only policy (θ-gain ≈ 80)</div>
+      <div><span class="dot" style="background:var(--dr)"></span>domain-randomized policy (θ-gain ≈ 35)</div>
+    </div>
+    <div class="stat" id="stat">Drag a slider or hit <b>Perturb the world</b>.</div>
+    <div class="note">Personal side project — fully synthetic demo. Honest trade-off: the DR policy gives up a little
+      peak tightness (it uses lower gains, so at nominal it corrects a touch less crisply) in exchange for surviving a
+      wide band of shifted worlds. Push the sliders <i>far</i> past DR's training range (latency ≫ 5, or extreme
+      length/mass) and the DR cart eventually falls too — robustness is a band around what it trained on, not magic.</div>
+  </div>
+</div>
+<script>
+// ==================================================================
+// <<CORE>>  (DOM-free, node-testable — extracted verbatim by the headless test)
+// Cart-pole dynamics + two linear state-feedback policies, ported from
+// scripts/30_domain_randomization.py. Weights are the CEM-learned vectors.
+// ------------------------------------------------------------------
+var G = 9.8;            // gravity [m/s^2]
+var DT = 0.02;          // integration step [s]
+var THETA_LIM = 0.35;   // fall threshold [rad] (~20 deg)
+var X_LIM = 2.4;        // off-track threshold [m]
+var F_MAX = 15.0;       // actuator force saturation [N]
+
+// Nominal (sim) world: cart mass M, pole mass m, pole half-length l, latency, noise.
+var NOMINAL = { M:1.0, m:0.1, l:0.5, lat:0, noise:0.0 };
+
+// CEM-learned 4-weight linear policies  f = clip(w . state, +/-F_MAX).
+// state = [x, x_dot, theta, theta_dot].  theta-gain: nominal ~80 (aggressive), DR ~35 (conservative).
+var W_NOMINAL = [1.89, 1.22, 79.96, 4.44];  // nominal-only CEM
+var W_DR      = [1.00, 1.85, 34.77, 8.28];  // domain-randomized CEM
+
+// One semi-implicit Euler step of the Barto/Sutton inverted pendulum.
+// theta = 0 is straight up. Returns a NEW state array (pure).
+function cartpoleStep(s, force, M, m, l){
+  var x = s[0], xd = s[1], th = s[2], thd = s[3];
+  var st = Math.sin(th), ct = Math.cos(th);
+  var tot = M + m;
+  var temp = (force + m * l * thd * thd * st) / tot;
+  var thdd = (G * st - ct * temp) / (l * (4.0/3.0 - m * ct * ct / tot));
+  var xdd  = temp - m * l * thdd * ct / tot;
+  xd  = xd  + DT * xdd;    // semi-implicit: velocities first
+  thd = thd + DT * thdd;
+  x   = x   + DT * xd;
+  th  = th  + DT * thd;
+  return [x, xd, th, thd];
+}
+
+// Linear state-feedback control law with force saturation.
+function policyForce(w, obs){
+  var a = w[0]*obs[0] + w[1]*obs[1] + w[2]*obs[2] + w[3]*obs[3];
+  if (a >  F_MAX) a =  F_MAX;
+  if (a < -F_MAX) a = -F_MAX;
+  return a;
+}
+
+// Standard-normal sampler from a [0,1) source (Box-Muller).
+function gauss(rand){
+  var u = 0, v = 0;
+  while (u === 0) u = rand();
+  while (v === 0) v = rand();
+  return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+// Roll out policy w in `world` from initial tilt th0; return number of steps
+// kept upright (capped at maxSteps). Models control latency as an action queue
+// and optional sensor noise on the observation — same structure as the Python rollout.
+function runEpisode(w, world, opts){
+  opts = opts || {};
+  var maxSteps = opts.maxSteps != null ? opts.maxSteps : 600;
+  var th0 = opts.th0 != null ? opts.th0 : 0.12;
+  var rand = opts.rand || Math.random;
+  var M = world.M, m = world.m, l = world.l;
+  var lat = world.lat | 0, noise = world.noise || 0;
+  var s = [0, 0, th0, 0];
+  var buf = [];
+  for (var i = 0; i < lat; i++) buf.push(0);
+  var steps = 0;
+  for (var k = 0; k < maxSteps; k++){
+    var obs = s;
+    if (noise > 0){
+      obs = [ s[0] + gauss(rand)*noise, s[1] + gauss(rand)*noise,
+              s[2] + gauss(rand)*noise, s[3] + gauss(rand)*noise ];
+    }
+    var a = policyForce(w, obs);
+    if (lat > 0){ buf.push(a); a = buf.shift(); }
+    s = cartpoleStep(s, a, M, m, l);
+    if (Math.abs(s[2]) > THETA_LIM || Math.abs(s[0]) > X_LIM) break;
+    steps++;
+  }
+  return steps;
+}
+// <<CORE-END>>
+// ==================================================================
+
+if (typeof module !== 'undefined' && module.exports){
+  module.exports = {
+    G:G, DT:DT, THETA_LIM:THETA_LIM, X_LIM:X_LIM, F_MAX:F_MAX,
+    NOMINAL:NOMINAL, W_NOMINAL:W_NOMINAL, W_DR:W_DR,
+    cartpoleStep:cartpoleStep, policyForce:policyForce, gauss:gauss, runEpisode:runEpisode
+  };
+}
+
+// ---------------- demo (browser only) ----------------
+if (typeof document !== 'undefined') (function(){
+  var cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+
+  // DR training ranges (for the "outside DR range" warning) — from scripts/30.
+  var DR_l = [0.35, 0.75], DR_m = [0.05, 0.40], DR_LAT_MAX = 5;
+
+  var lenEl = document.getElementById('len'),   lenVal = document.getElementById('lenVal');
+  var massEl = document.getElementById('mass'), massVal = document.getElementById('massVal');
+  var latEl = document.getElementById('lat'),   latVal = document.getElementById('latVal');
+  var noiseEl = document.getElementById('noise'), noiseVal = document.getElementById('noiseVal');
+  var shiftVal = document.getElementById('shiftVal'), shiftFill = document.getElementById('shiftFill');
+  var warnEl = document.getElementById('warn'), statEl = document.getElementById('stat');
+
+  function world(){
+    return {
+      M: 1.0,
+      m: (+massEl.value)/100,
+      l: (+lenEl.value)/100,
+      lat: (+latEl.value)|0,
+      noise: (+noiseEl.value)/1000   // 0..0.05 rad/m
+    };
+  }
+
+  // two carts sharing the same world; only the policy differs.
+  function makeCart(w, color, label){
+    return { w:w, color:color, label:label, s:[0,0,0,0], buf:[], alive:true,
+             tBal:0, best:0, fellAt:0, coolT:0 };
+  }
+  var carts = [ makeCart(W_NOMINAL, '#f85149', 'nominal-only'),
+                makeCart(W_DR, '#3fb950', 'domain-randomized') ];
+  var th0 = 0.12;
+
+  function respawn(cart){
+    cart.s = [0, 0, th0, 0];
+    cart.buf = [];
+    var wd = world();
+    for (var i = 0; i < wd.lat; i++) cart.buf.push(0);
+    cart.alive = true; cart.tBal = 0; cart.coolT = 0;
+  }
+  function resetAll(newTilt){
+    if (newTilt) th0 = 0.06 + Math.random()*0.12;
+    for (var i = 0; i < carts.length; i++){ carts[i].best = 0; respawn(carts[i]); }
+  }
+
+  function stepCart(cart, wd){
+    if (!cart.alive){
+      cart.coolT += DT;
+      if (cart.coolT > 1.2) respawn(cart);   // auto-reset after a beat
+      return;
+    }
+    var s = cart.s;
+    var obs = s;
+    if (wd.noise > 0){
+      obs = [ s[0]+gauss(Math.random)*wd.noise, s[1]+gauss(Math.random)*wd.noise,
+              s[2]+gauss(Math.random)*wd.noise, s[3]+gauss(Math.random)*wd.noise ];
+    }
+    var a = policyForce(cart.w, obs);
+    if (wd.lat > 0){ cart.buf.push(a); a = cart.buf.shift(); }
+    cart.s = cartpoleStep(s, a, wd.M, wd.m, wd.l);
+    if (Math.abs(cart.s[2]) > THETA_LIM || Math.abs(cart.s[0]) > X_LIM){
+      cart.alive = false; cart.fellAt = cart.tBal;
+    } else {
+      cart.tBal += DT;
+      if (cart.tBal > cart.best) cart.best = cart.tBal;
+    }
+  }
+
+  // fixed-timestep accumulator
+  var lastT = null, acc = 0;
+  function tick(now){
+    if (lastT === null) lastT = now;
+    var dtReal = (now - lastT)/1000; lastT = now;
+    if (dtReal > 0.1) dtReal = 0.1;
+    acc += dtReal;
+    var guard = 0;
+    var wd = world();
+    while (acc >= DT && guard < 600){
+      for (var i = 0; i < carts.length; i++) stepCart(carts[i], wd);
+      acc -= DT; guard++;
+    }
+    render(wd);
+    requestAnimationFrame(tick);
+  }
+
+  // ---- drawing ----
+  function drawCart(cx, halfW, cart, wd){
+    var railY = H*0.62;
+    // panel frame + label
+    ctx.fillStyle = '#8b949e'; ctx.font = '13px -apple-system,Segoe UI,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = cart.color;
+    ctx.fillText(cart.label + ' policy', cx, 30);
+    // rail
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx-halfW+20, railY); ctx.lineTo(cx+halfW-20, railY); ctx.stroke();
+    // track-limit ticks
+    ctx.strokeStyle = '#21262d'; ctx.lineWidth = 1;
+    [-X_LIM, X_LIM].forEach(function(xl){
+      var px = cx + (xl/X_LIM)*(halfW-46);
+      ctx.beginPath(); ctx.moveTo(px, railY-8); ctx.lineTo(px, railY+8); ctx.stroke();
+    });
+    // cart position
+    var s = cart.s;
+    var px = cx + (s[0]/X_LIM)*(halfW-46);
+    var poleLenPx = 60 + wd.l*150;     // longer pole = taller (visualizes length shift)
+    var faded = cart.alive ? 1 : 0.35;
+    ctx.globalAlpha = faded;
+    // cart body
+    var cw = 46, ch = 22;
+    ctx.fillStyle = cart.alive ? '#21262d' : '#161b22';
+    ctx.strokeStyle = cart.color; ctx.lineWidth = 2;
+    roundRect(px-cw/2, railY-ch/2, cw, ch, 5); ctx.fill(); ctx.stroke();
+    // wheels
+    ctx.fillStyle = cart.color;
+    ctx.beginPath(); ctx.arc(px-cw/4, railY+ch/2, 4, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(px+cw/4, railY+ch/2, 4, 0, 7); ctx.fill();
+    // pole (theta=0 up)
+    var th = s[2];
+    var topx = px + Math.sin(th)*poleLenPx;
+    var topy = railY - ch/2 - Math.cos(th)*poleLenPx;
+    ctx.strokeStyle = cart.color; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(px, railY-ch/2); ctx.lineTo(topx, topy); ctx.stroke();
+    // bob
+    ctx.fillStyle = cart.color;
+    ctx.beginPath(); ctx.arc(topx, topy, 7 + wd.m*18, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+    // status readout
+    ctx.textAlign = 'center';
+    if (cart.alive){
+      ctx.fillStyle = cart.color; ctx.font = 'bold 15px -apple-system,Segoe UI,sans-serif';
+      ctx.fillText('▲ UPRIGHT  ' + cart.tBal.toFixed(1) + ' s', cx, H-46);
+    } else {
+      ctx.fillStyle = '#8b949e'; ctx.font = 'bold 15px -apple-system,Segoe UI,sans-serif';
+      ctx.fillText('✗ FELL after ' + cart.fellAt.toFixed(1) + ' s', cx, H-46);
+    }
+    ctx.fillStyle = '#6e7681'; ctx.font = '12px -apple-system,Segoe UI,sans-serif';
+    ctx.fillText('best this round: ' + cart.best.toFixed(1) + ' s', cx, H-26);
+    ctx.textAlign = 'left';
+  }
+  function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+  function render(wd){
+    ctx.clearRect(0,0,W,H);
+    // divider
+    ctx.strokeStyle = '#30363d'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(W/2, 12); ctx.lineTo(W/2, H-12); ctx.stroke();
+    drawCart(W*0.25, W*0.25, carts[0], wd);
+    drawCart(W*0.75, W*0.25, carts[1], wd);
+    updateReadout(wd);
+  }
+
+  // ---- shift indicator + panel readout ----
+  function updateReadout(wd){
+    lenVal.textContent = wd.l.toFixed(2) + ' m';
+    massVal.textContent = wd.m.toFixed(2) + ' kg';
+    latVal.textContent = wd.lat + (wd.lat === 1 ? ' step' : ' steps');
+    noiseVal.textContent = wd.noise.toFixed(3);
+    // normalized shift from nominal across the 4 axes
+    var dl = Math.abs(wd.l - 0.5)/0.5;
+    var dm = Math.abs(wd.m - 0.1)/0.3;
+    var dlat = wd.lat/9;
+    var dn = wd.noise/0.05;
+    var shift = Math.min(1, (dl + dm + dlat + dn)/4 * 1.6);
+    shiftVal.textContent = Math.round(shift*100) + '%';
+    shiftFill.style.width = Math.round(shift*100) + '%';
+    // outside-DR-range warning
+    var outside = wd.lat > DR_LAT_MAX || wd.l < DR_l[0] || wd.l > DR_l[1] ||
+                  wd.m < DR_m[0] || wd.m > DR_m[1];
+    warnEl.textContent = outside ? '⚠ outside DR training range — even DR may fall here' : '';
+
+    var a = carts[0], b = carts[1];
+    var aTxt = a.alive ? ('<b style="color:#f85149">upright ' + a.tBal.toFixed(1) + ' s</b>')
+                       : ('<b style="color:#8b949e">fell @ ' + a.fellAt.toFixed(1) + ' s</b>');
+    var bTxt = b.alive ? ('<b style="color:#3fb950">upright ' + b.tBal.toFixed(1) + ' s</b>')
+                       : ('<b style="color:#8b949e">fell @ ' + b.fellAt.toFixed(1) + ' s</b>');
+    statEl.innerHTML = 'nominal-only: ' + aTxt + '<br>domain-randomized: ' + bTxt;
+  }
+
+  // ---- controls ----
+  function onSlider(){ resetAll(false); }
+  lenEl.oninput = onSlider; massEl.oninput = onSlider;
+  latEl.oninput = onSlider; noiseEl.oninput = onSlider;
+
+  document.getElementById('reset').onclick = function(){
+    lenEl.value = 50; massEl.value = 10; latEl.value = 0; noiseEl.value = 0;
+    resetAll(true);
+  };
+  document.getElementById('perturb').onclick = function(){
+    // jump to a random shifted world (mostly inside DR's band so the contrast shows)
+    lenEl.value  = 55 + Math.floor(Math.random()*20);   // 0.55..0.74 m
+    massEl.value = 22 + Math.floor(Math.random()*16);   // 0.22..0.37 kg
+    latEl.value  = 3  + Math.floor(Math.random()*3);    // 3..5 steps
+    noiseEl.value= Math.floor(Math.random()*12);        // 0..0.011
+    resetAll(true);
+  };
+
+  resetAll(true);
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

@@ -18,16 +18,21 @@ Move your mouse as a "surgeon's hand"; a real-time adaptive Fourier-Linear-Combi
 injected ~10 Hz physiological tremor so the robot tool tip tracks your intended motion (~6× tremor
 suppression, live in-browser, no libraries).
 
+🎲 **[Try the interactive sim-to-real demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/dr_demo.html)**
+Two cart-poles balance under the same shifted "real" world — a nominal-only policy vs a domain-randomized
+one — so you can drag the dynamics away from nominal and watch the overfit controller fall while the robust
+one keeps balancing (`dr_demo.html`, no libraries).
+
 📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-32 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+33 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
-→ a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real.**
+→ a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -61,6 +66,7 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 30 | domain randomization (sim-to-real) | robust off-nominal success 0.11 → **0.55** (trades peak for robustness) |
 | 31 | SimOpt — closing the sim-to-real loop | system-ID loop cuts param error **93%**, real balancing 71 → **200** |
 | 32 | reward design & reward hacking | shaped **0.76** vs sparse 0.35 success; hacked reward high but **0.00** solved |
+| 33 | **residual RL** (classical base + learned) | base+residual cost **24×**, steady-state error **120×**, learns safer |
 
 ## Experiments
 
@@ -684,6 +690,28 @@ the controller must pump energy — making reward shaping matter.
 
 ![reward shaping](assets/32_reward_shaping.png)
 
+### 33. Residual RL — classical base + learned correction (`scripts/33_residual_rl.py`)
+The hybrid actually deployed on real robots: keep a safe, interpretable **classical base controller** and let
+RL learn only a small **residual** that fixes what the base model gets wrong. Plant: a cart-pole with an
+**unmodeled constant disturbance** the base controller never sees. The base is an **LQR** from the nominal
+linearization (continuous Riccati) — it balances the pole but, having no integral action, lets the cart drift
+to a large steady-state offset. Three controllers on the true plant at **equal CEM budget**: base alone,
+learn-from-scratch (no base), and **base + residual** (`u = u_base(s) + clip(w·φ(s), ±6N)`, residual from 0).
+
+| controller (true plant) | regulation cost ↓ | steady-state cart error ↓ | falls during training ↓ |
+|--|----------:|----------:|----------:|
+| base only (LQR) | 82.6 | 0.846 m | — |
+| from-scratch (equal budget) | 4.2 ± 0.6 | — | 21.8% |
+| **base + residual (hybrid)** | **3.5 ± 0.1** | **0.007 m** | **0.7%** |
+
+- The residual cancels the disturbance (steady-state error **120×** smaller), reaches near-final performance in
+  ~4 CEM iterations vs ~12 for from-scratch, and almost never falls while learning — **sample-efficiency + safety**.
+- Honest tradeoffs: from-scratch catches up with a larger budget; residual RL assumes a decent base already
+  exists. This is the concrete **model-based + learning** hybrid — the safe classical stack keeps its guarantees
+  while learning only adds the correction.
+
+![residual rl](assets/33_residual_rl.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -727,6 +755,7 @@ python scripts/29_lidar_slam_3d.py    # 3D LiDAR SLAM (point-to-plane ICP + SE(3
 python scripts/30_domain_randomization.py  # domain randomization (sim-to-real)
 python scripts/31_simopt_loop.py      # SimOpt: closing the sim-to-real loop
 python scripts/32_reward_shaping.py   # reward design & reward hacking
+python scripts/33_residual_rl.py      # residual RL: classical base + learned correction
 pytest -q
 ```
 
@@ -770,6 +799,7 @@ scripts/
   30_domain_randomization.py  domain randomization for sim-to-real (CEM policy search)
   31_simopt_loop.py      SimOpt: system-ID loop closing the sim-to-real gap
   32_reward_shaping.py   reward design & reward hacking (pendulum swing-up)
+  33_residual_rl.py      residual RL: classical LQR base + learned CEM correction
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
 tests/
@@ -805,6 +835,8 @@ tests/
 - [x] Navigation capstone: A* global plan + obstacle-aware MPC local (dynamic world)
 - [x] 3D LiDAR SLAM: point-to-plane ICP front-end + SE(3) pose-graph back-end
 - [x] Learning-based control & sim-to-real: domain randomization, SimOpt loop, reward design
+- [x] Residual RL: classical base controller + learned correction (model-based + learning hybrid)
+- [x] Three interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real)
 - [ ] True incremental factorization (iSAM Bayes tree) for O(1) global updates
 - [ ] ROS2 node wrapping the filter
 
