@@ -23,17 +23,22 @@ Two cart-poles balance under the same shifted "real" world — a nominal-only po
 one — so you can drag the dynamics away from nominal and watch the overfit controller fall while the robust
 one keeps balancing (`dr_demo.html`, no libraries).
 
+🛰️ **[Try the interactive particle-filter (MCL) demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/mcl_demo.html)**
+A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
+after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
+
 📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-36 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+37 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
 → a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
-→ synthetic data & auto-labeling → incremental smoothing → particle-filter localization.**
+→ synthetic data & auto-labeling → incremental smoothing → particle-filter localization
+→ an error-state KF.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -71,6 +76,7 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 34 | synthetic data & **auto-labeling** (sim-to-real) | synth+DR **1.89 px** beats no-DR 6.94 & scarce-real 2.12 |
 | 35 | incremental smoothing (**iSAM**-style) | near-batch RMSE (1.16×) at **3.7× less** compute |
 | 36 | **Monte Carlo Localization** (particle filter) | **11.9×** over odometry; global/kidnapped, ring posterior |
+| 37 | **error-state KF** (ESKF) for attitude | gyro-only 28.5° → ESKF **0.48°** (60×), bias estimated online |
 
 ## Experiments
 
@@ -783,6 +789,27 @@ uniform prior.
 
 ![particle filter](assets/36_particle_filter.png)
 
+### 37. Error-State Kalman Filter (ESKF) for attitude (`scripts/37_error_state_kf.py`)
+The indirect / error-state formulation used in essentially every real VIO/INS. Orientation is estimated from a
+biased, noisy gyroscope aided by an accelerometer (gravity reference) and a magnetometer (heading reference).
+The trick: split the state into a **nominal** part (orientation R + gyro bias, integrated on the SO(3) manifold)
+and a small **error** part (3D rotation error δθ + bias error δb) tracked by a linear KF in the tangent space.
+Each step the estimated error is injected into the nominal state via the exp map and reset to zero — so the KF
+only ever handles small, well-linearized quantities (no quaternion-norm constraint, no singularities).
+
+| method | attitude RMSE (steady-state) |
+|--|----------:|
+| gyro-only integration | 28.51° |
+| **ESKF (gyro + accel + mag)** | **0.48°** |
+
+- The ESKF is **60×** better than gyro integration (which drifts, mostly in yaw from the unmodeled bias) and
+  estimates the gyro bias online (final bias error 0.065°/s).
+- Honest observability limits: the accelerometer only measures gravity *direction*, so it fixes roll/pitch but
+  is invariant to yaw — heading needs the magnetometer; and the sim assumes quasi-static motion (accel sees only
+  gravity, while real specific force mixes in linear acceleration).
+
+![eskf](assets/37_error_state_kf.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -830,6 +857,7 @@ python scripts/33_residual_rl.py      # residual RL: classical base + learned co
 python scripts/34_synthetic_labeling.py  # synthetic data & auto-labeling (sim-to-real)
 python scripts/35_incremental_smoothing.py  # incremental smoothing (iSAM-style)
 python scripts/36_particle_filter.py  # Monte Carlo Localization (particle filter)
+python scripts/37_error_state_kf.py   # error-state KF (ESKF) for attitude
 pytest -q
 ```
 
@@ -877,6 +905,7 @@ scripts/
   34_synthetic_labeling.py  synthetic data & auto-labeling for sim-to-real perception
   35_incremental_smoothing.py  incremental smoothing (iSAM-style) vs batch
   36_particle_filter.py  Monte Carlo Localization (nonparametric, range-only)
+  37_error_state_kf.py   error-state KF (ESKF) for 3D attitude (gyro+accel+mag)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 src/sensor_fusion/posegraph.py  SE(2) pose-graph core
@@ -941,7 +970,9 @@ above is documented, not faked.
 - [x] 3D LiDAR SLAM: point-to-plane ICP front-end + SE(3) pose-graph back-end
 - [x] Learning-based control & sim-to-real: domain randomization, SimOpt loop, reward design
 - [x] Residual RL: classical base controller + learned correction (model-based + learning hybrid)
-- [x] Three interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real)
+- [x] Four interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real, particle-filter MCL)
+- [x] Error-state KF (ESKF) for attitude — the indirect formulation used in real VIO/INS
+- [x] Medical-robotics blog post tying safe autonomy + tremor + gait (blog/05)
 - [x] Synthetic data & auto-labeling for sim-to-real perception (domain randomization on labels)
 - [x] Incremental smoothing (iSAM-style): relinearize-on-demand, near-batch at a fraction of compute
 - [x] Monte Carlo Localization (particle filter): nonparametric, multimodal, global/kidnapped

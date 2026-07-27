@@ -1,0 +1,358 @@
+---
+layout: none
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive Monte Carlo Localization — sensor-fusion-lab</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --true:#3fb950; --est:#f0f6fc; --part:#d29922; --lm:#a371f7; --bad:#f85149; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; line-height:1.55; max-width:900px; }
+  header a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; flex-wrap:wrap; gap:18px; padding:18px 22px; }
+  .stage { flex:1 1 520px; min-width:320px; }
+  canvas { width:100%; background:#0a0e14; border:1px solid #30363d; border-radius:10px; display:block; }
+  .panel { flex:0 0 270px; background:var(--panel); border:1px solid #30363d; border-radius:10px; padding:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 10px; }
+  button { width:100%; padding:10px; margin:6px 0; border:1px solid #30363d; border-radius:8px; background:#21262d; color:var(--fg); font-size:14px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0d1117; font-weight:600; border-color:var(--accent); }
+  button.kidnap { background:var(--bad); color:#0d1117; font-weight:600; border-color:var(--bad); }
+  button.kidnap:hover { border-color:#fff; }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input[type=range] { width:100%; }
+  .legend { font-size:13px; line-height:1.9; margin-top:10px; }
+  .dot { display:inline-block; width:11px; height:11px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  .star { color:var(--lm); margin-right:5px; }
+  .stat { font-size:13px; color:var(--muted); margin-top:12px; padding-top:12px; border-top:1px solid #30363d; line-height:1.7; }
+  .stat b { color:var(--fg); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:20px; font-weight:600; font-size:12px; }
+  .badge.ok { background:rgba(63,185,80,.18); color:var(--true); }
+  .badge.lost { background:rgba(248,81,73,.18); color:var(--bad); }
+  .note { font-size:12px; color:var(--muted); line-height:1.6; margin:14px 22px 26px; max-width:900px; }
+  .note b { color:var(--fg); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛰️ Interactive Monte Carlo Localization</h1>
+  <p>A robot wanders a known landmark map, sensing only <b>noisy ranges</b> to nearby beacons.
+     A cloud of particles — hypothesis poses — starts spread over the <b>whole map</b> (global
+     localization, no initial pose) and collapses onto the truth as measurements arrive. Hit
+     <b>Kidnap robot</b> to teleport it and watch the belief re-spread and re-converge — the reason a
+     nonparametric particle filter beats a single Gaussian. Runs live in your browser (no libraries).
+     From <a href="https://github.com/YeonkyunLee/sensor-fusion-lab">sensor-fusion-lab</a>.</p>
+</header>
+<div class="wrap">
+  <div class="stage"><canvas id="cv" width="900" height="640"></canvas></div>
+  <div class="panel">
+    <h2>Controls</h2>
+    <button id="run" class="primary">⏸ Pause</button>
+    <button id="kidnap" class="kidnap">🚚 Kidnap robot</button>
+    <button id="reset">↺ Reset (re-spread)</button>
+    <label>Particles <span id="npVal"></span></label>
+    <input type="range" id="np" min="300" max="4000" step="100" value="1200">
+    <label>Sensor noise <span id="nzVal"></span></label>
+    <input type="range" id="nz" min="1" max="20" step="1" value="6">
+    <div class="legend">
+      <div><span class="star">★</span>landmarks (known map)</div>
+      <div><span class="dot" style="background:var(--part)"></span>particles (belief), brighter = heavier</div>
+      <div><span class="dot" style="background:var(--true)"></span>true robot &amp; range rings</div>
+      <div><span class="dot" style="background:var(--est)"></span>weighted-mean estimate</div>
+    </div>
+    <div class="stat" id="stat">Starting…</div>
+  </div>
+</div>
+<p class="note">
+  <b>How it works.</b> Each step: (1) <b>motion update</b> — push every particle through the noisy
+  unicycle model; (2) <b>measurement update</b> — weight each particle by how well its predicted
+  ranges match the sensor (Gaussian likelihood); (3) <b>resample</b> — low-variance/systematic
+  resampling keeps heavy particles and drops light ones, with a small roughening floor so the cloud
+  never fully depletes; (4) <b>estimate</b> — the weighted mean pose.
+  <b>Honest caveats:</b> a single range fixes only a <i>ring</i> of possible positions, so range-only
+  belief is genuinely multimodal early on — you'll see several particle clumps before they resolve.
+  More particles = better coverage of a kidnap but linearly more compute. On a real kidnapping the
+  filter can't know it was moved; here Reset/Kidnap re-seed the cloud map-wide (equivalent to random
+  particle injection) so the recovery is visible every time. Synthetic demo — no real robot or data.
+</p>
+<script>
+// =====================================================================
+// Pure, DOM-free Monte Carlo Localization core (headless-testable).
+// Ported from scripts/36_particle_filter.py.
+// <<CORE>>
+function wrap(a){ while(a>Math.PI)a-=2*Math.PI; while(a<-Math.PI)a+=2*Math.PI; return a; }
+
+// mulberry32 seeded PRNG (deterministic tests; Math.random in the browser)
+function makeRng(seed){
+  let s = seed>>>0;
+  return function(){ s|=0; s=(s+0x6D2B79F5)|0; let t=Math.imul(s^(s>>>15),1|s); t=(t+Math.imul(t^(t>>>7),61|t))^t; return ((t^(t>>>14))>>>0)/4294967296; };
+}
+function randn(rng){ let u=0,v=0; while(!u)u=rng(); while(!v)v=rng(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+
+// unicycle motion model. pose = {x,y,th}
+function motion(p, v, w, dt){
+  return { x: p.x + v*dt*Math.cos(p.th), y: p.y + v*dt*Math.sin(p.th), th: wrap(p.th + w*dt) };
+}
+
+// noiseless-or-noisy range sense: ranges to landmarks within sensorRange
+function sense(pose, landmarks, sensorRange, rStd, rng){
+  const idx=[], z=[];
+  for(let i=0;i<landmarks.length;i++){
+    const dx=pose.x-landmarks[i][0], dy=pose.y-landmarks[i][1];
+    const r=Math.hypot(dx,dy);
+    if(r<=sensorRange){ idx.push(i); z.push(r + (rng?randn(rng)*rStd:0)); }
+  }
+  return {idx, z};
+}
+
+// initialize N particles uniformly over the whole map (global / kidnapped)
+function initGlobal(N, world, rng){
+  const P=new Array(N);
+  for(let i=0;i<N;i++) P[i]={ x: rng()*world[0], y: rng()*world[1], th: rng()*2*Math.PI-Math.PI };
+  return { P, w: new Array(N).fill(1/N) };
+}
+
+// weighted mean pose (circular mean for heading)
+function weightedMean(P, w){
+  let mx=0,my=0,ss=0,cc=0;
+  for(let i=0;i<P.length;i++){ mx+=w[i]*P[i].x; my+=w[i]*P[i].y; ss+=w[i]*Math.sin(P[i].th); cc+=w[i]*Math.cos(P[i].th); }
+  return { x:mx, y:my, th:Math.atan2(ss,cc) };
+}
+
+// low-variance / systematic resampling → array of parent indices
+function systematicResample(w, rng){
+  const N=w.length, idx=new Array(N);
+  const r0=rng()/N;
+  let c=w[0], i=0;
+  for(let n=0;n<N;n++){
+    const u=r0+n/N;
+    while(u>c && i<N-1){ i++; c+=w[i]; }
+    idx[n]=i;
+  }
+  return idx;
+}
+
+// effective sample size
+function neff(w){ let s=0; for(let i=0;i<w.length;i++) s+=w[i]*w[i]; return 1/s; }
+
+// one full MCL step: motion + measurement weight + resample(+roughening) + estimate.
+// state {P,w} is mutated in place. Returns {est, neff, resampled}.
+function mclStep(state, control, meas, params, rng){
+  const P=state.P, w=state.w, N=P.length;
+  const dt=params.dt, vStd=params.vStd, wStd=params.wStd, rFilter=params.rFilter;
+  const rough=params.roughFloor, landmarks=params.landmarks;
+
+  // (1) motion update: propagate each particle with per-particle control noise
+  for(let i=0;i<N;i++){
+    const vp=control.v + randn(rng)*vStd;
+    const wp=control.w + randn(rng)*wStd;
+    P[i]=motion(P[i], vp, wp, dt);
+  }
+
+  // (2) measurement update: accumulate log-likelihood (range Gaussian), normalize
+  if(meas.idx.length>0){
+    let maxlog=-Infinity; const logw=new Array(N);
+    for(let i=0;i<N;i++){
+      let lw=Math.log(w[i]+1e-300);
+      for(let k=0;k<meas.idx.length;k++){
+        const lm=landmarks[meas.idx[k]];
+        const rp=Math.hypot(P[i].x-lm[0], P[i].y-lm[1]);
+        const e=(meas.z[k]-rp)/rFilter;
+        lw += -0.5*e*e;
+      }
+      logw[i]=lw; if(lw>maxlog)maxlog=lw;
+    }
+    let sum=0;
+    for(let i=0;i<N;i++){ w[i]=Math.exp(logw[i]-maxlog); sum+=w[i]; }
+    for(let i=0;i<N;i++) w[i]/=sum;
+  }
+
+  // estimate BEFORE resample (weights carry the belief)
+  const est=weightedMean(P,w);
+  const ne=neff(w);
+
+  // (3) resample only when the cloud has degenerated (keeps diversity)
+  let resampled=false;
+  if(ne < N/2){
+    resampled=true;
+    const idx=systematicResample(w,rng);
+    const nP=new Array(N);
+    for(let i=0;i<N;i++){ const p=P[idx[i]]; nP[i]={x:p.x,y:p.y,th:p.th}; }
+    // roughening: state-width-proportional jitter with an absolute floor (anti-depletion)
+    let minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+    for(let i=0;i<N;i++){ const p=nP[i]; if(p.x<minx)minx=p.x; if(p.x>maxx)maxx=p.x; if(p.y<miny)miny=p.y; if(p.y>maxy)maxy=p.y; }
+    const n13=Math.pow(N,-1/3);
+    const sx=Math.max(0.05*(maxx-minx)*n13, rough[0]);
+    const sy=Math.max(0.05*(maxy-miny)*n13, rough[1]);
+    const sth=rough[2];
+    for(let i=0;i<N;i++){ nP[i].x+=randn(rng)*sx; nP[i].y+=randn(rng)*sy; nP[i].th=wrap(nP[i].th+randn(rng)*sth); }
+    for(let i=0;i<N;i++){ state.P[i]=nP[i]; w[i]=1/N; }
+  }
+  return { est, neff:ne, resampled };
+}
+
+if (typeof module !== 'undefined' && module.exports){
+  module.exports = { wrap, makeRng, randn, motion, sense, initGlobal, weightedMean, systematicResample, neff, mclStep };
+}
+// <<CORE-END>>
+// =====================================================================
+
+// ---- world / params (meters; canvas scaled from world) ----
+const WORLD = [100, 80];
+const LANDMARKS = [
+  [10,12],[30,8],[55,14],[80,10],[92,30],
+  [78,52],[88,70],[60,68],[40,74],[18,66],
+  [8,44],[26,40],[50,44],[70,34],[44,22],
+];
+const DT=0.1, V=6.0, W=0.5, SENSOR_RANGE=22.0;
+const V_STD=0.12, W_STD=0.04, R_STD_BASE=0.1;   // R_STD scaled by the noise slider
+const CONV_THRESH=3.0, ROUGH_FLOOR=[0.5,0.5,0.05];
+
+// ---- DOM ----
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const runBtn=document.getElementById('run'), kidBtn=document.getElementById('kidnap'), resetBtn=document.getElementById('reset');
+const npEl=document.getElementById('np'), nzEl=document.getElementById('nz'), stat=document.getElementById('stat');
+const npVal=document.getElementById('npVal'), nzVal=document.getElementById('nzVal');
+const SX = cv.width/WORLD[0], SY = cv.height/WORLD[1];
+const tx = x => x*SX, ty = y => cv.height - y*SY;   // flip y so +y is up
+
+// ---- sim state ----
+let truth, ctrlIdx, controls, particles, params, running=true, rng=Math.random, lastEst=null, kidFlash=0;
+
+function buildControls(){
+  const c=[]; const straight=60, turn=31;
+  for(let L=0;L<4;L++){ for(let i=0;i<straight;i++)c.push({v:V,w:0}); for(let i=0;i<turn;i++)c.push({v:V,w:W}); }
+  return c;
+}
+function rStd(){ return R_STD_BASE * parseInt(nzEl.value); }
+function makeParams(){
+  return { dt:DT, vStd:V_STD, wStd:W_STD, rFilter:Math.max(2.5, 2.0*rStd()+1.0), roughFloor:ROUGH_FLOOR, landmarks:LANDMARKS };
+}
+function respread(){
+  const N=parseInt(npEl.value);
+  particles=initGlobal(N, WORLD, rng);
+  lastEst=null;
+}
+function reset(){
+  truth={ x:18, y:15, th:0 };
+  controls=buildControls(); ctrlIdx=0;
+  params=makeParams();
+  respread();
+}
+function kidnap(){
+  // teleport truth to a fresh random pose, then re-seed belief map-wide (visible recovery)
+  truth={ x:8+rng()*(WORLD[0]-16), y:8+rng()*(WORLD[1]-16), th:rng()*2*Math.PI-Math.PI };
+  respread(); kidFlash=30;
+}
+
+function step(){
+  const ctrl=controls[ctrlIdx % controls.length]; ctrlIdx++;
+  // advance ground truth with its own control noise
+  truth=motion(truth, ctrl.v+randn(rngW)*V_STD, ctrl.w+randn(rngW)*W_STD, DT);
+  // keep truth inside the map (bounce heading)
+  if(truth.x<4||truth.x>WORLD[0]-4){ truth.th=wrap(Math.PI-truth.th); truth.x=Math.min(Math.max(truth.x,4),WORLD[0]-4); }
+  if(truth.y<4||truth.y>WORLD[1]-4){ truth.th=wrap(-truth.th); truth.y=Math.min(Math.max(truth.y,4),WORLD[1]-4); }
+  const noisyMeas=senseNoisy(truth);
+  const r=mclStep(particles, ctrl, noisyMeas, params, rngW);
+  lastEst=r; lastMeas=noisyMeas;
+  return r;
+}
+// browser RNG helper (Math.random-backed); randn/mclStep need a ()=>[0,1) fn
+const rngW = ()=>Math.random();
+function senseNoisy(pose){
+  const idx=[], z=[];
+  for(let i=0;i<LANDMARKS.length;i++){
+    const dx=pose.x-LANDMARKS[i][0], dy=pose.y-LANDMARKS[i][1], rr=Math.hypot(dx,dy);
+    if(rr<=SENSOR_RANGE){ idx.push(i); z.push(rr+randn(rngW)*rStd()); }
+  }
+  return {idx,z};
+}
+let lastMeas={idx:[],z:[]};
+
+// ---- draw ----
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  // subtle grid
+  ctx.strokeStyle='#12171f'; ctx.lineWidth=1;
+  for(let gx=0;gx<=WORLD[0];gx+=10){ ctx.beginPath(); ctx.moveTo(tx(gx),ty(0)); ctx.lineTo(tx(gx),ty(WORLD[1])); ctx.stroke(); }
+  for(let gy=0;gy<=WORLD[1];gy+=10){ ctx.beginPath(); ctx.moveTo(tx(0),ty(gy)); ctx.lineTo(tx(WORLD[0]),ty(gy)); ctx.stroke(); }
+
+  // particles, shaded by weight
+  const P=particles.P, w=particles.w; let wmax=1e-9; for(let i=0;i<w.length;i++) if(w[i]>wmax)wmax=w[i];
+  for(let i=0;i<P.length;i++){
+    const a=0.12+0.7*Math.min(1, w[i]/wmax);
+    ctx.fillStyle='rgba(210,153,34,'+a.toFixed(3)+')';
+    ctx.fillRect(tx(P[i].x)-1.1, ty(P[i].y)-1.1, 2.2, 2.2);
+  }
+
+  // range rings from truth to visible landmarks
+  ctx.strokeStyle='rgba(63,185,80,0.28)'; ctx.lineWidth=1;
+  for(let k=0;k<lastMeas.idx.length;k++){
+    const lm=LANDMARKS[lastMeas.idx[k]];
+    ctx.beginPath(); ctx.arc(tx(lm[0]),ty(lm[1]), lastMeas.z[k]*SX, 0, 7); ctx.stroke();
+  }
+
+  // landmarks
+  for(const lm of LANDMARKS) drawStar(tx(lm[0]),ty(lm[1]),7,'#a371f7');
+
+  // estimate
+  if(lastEst){
+    const e=lastEst.est;
+    ctx.strokeStyle='#f0f6fc'; ctx.lineWidth=2; ctx.beginPath();
+    ctx.arc(tx(e.x),ty(e.y),7,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx(e.x),ty(e.y)); ctx.lineTo(tx(e.x)+12*Math.cos(-e.th), ty(e.y)+12*Math.sin(-e.th)); ctx.stroke();
+  }
+  // true robot
+  ctx.fillStyle= kidFlash>0 ? '#f85149' : '#3fb950';
+  ctx.beginPath(); ctx.arc(tx(truth.x),ty(truth.y),6,0,7); ctx.fill();
+  ctx.strokeStyle=ctx.fillStyle; ctx.lineWidth=2; ctx.beginPath();
+  ctx.moveTo(tx(truth.x),ty(truth.y)); ctx.lineTo(tx(truth.x)+14*Math.cos(-truth.th), ty(truth.y)+14*Math.sin(-truth.th)); ctx.stroke();
+  if(kidFlash>0) kidFlash--;
+}
+function drawStar(x,y,r,c){
+  ctx.fillStyle=c; ctx.beginPath();
+  for(let i=0;i<10;i++){ const ang=Math.PI/5*i-Math.PI/2, rr=i%2?r*0.45:r; const px=x+rr*Math.cos(ang), py=y+rr*Math.sin(ang); i?ctx.lineTo(px,py):ctx.moveTo(px,py); }
+  ctx.closePath(); ctx.fill();
+}
+
+// ---- readout ----
+function updateStat(){
+  if(!lastEst){ stat.textContent='Global localization: belief spread over the whole map…'; return; }
+  const e=lastEst.est, err=Math.hypot(e.x-truth.x, e.y-truth.y);
+  const ne=lastEst.neff|0, N=particles.P.length;
+  const ok=err<CONV_THRESH;
+  stat.innerHTML =
+    'Status: <span class="badge '+(ok?'ok':'lost')+'">'+(ok?'CONVERGED':'LOCALIZING')+'</span><br>'+
+    'Estimate error: <b>'+err.toFixed(2)+' m</b><br>'+
+    'Effective sample size: <b>'+ne+'</b> / '+N+'<br>'+
+    'Visible landmarks: <b>'+lastMeas.idx.length+'</b>';
+}
+
+// ---- loop ----
+function frame(){
+  if(running){ step(); }
+  draw(); updateStat();
+  requestAnimationFrame(frame);
+}
+
+// ---- wiring ----
+runBtn.onclick=()=>{ running=!running; runBtn.textContent = running?'⏸ Pause':'▶ Resume'; };
+kidBtn.onclick=kidnap;
+resetBtn.onclick=reset;
+npEl.oninput=()=>{ npVal.textContent=npEl.value; respread(); };
+nzEl.oninput=()=>{ nzVal.textContent=(R_STD_BASE*parseInt(nzEl.value)).toFixed(1)+' m'; params=makeParams(); };
+window.addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'){ truth.th=wrap(truth.th+0.15); }
+  if(e.key==='ArrowRight'){ truth.th=wrap(truth.th-0.15); }
+});
+npVal.textContent=npEl.value; nzVal.textContent=(R_STD_BASE*parseInt(nzEl.value)).toFixed(1)+' m';
+reset(); frame();
+</script>
+</body>
+</html>
