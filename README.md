@@ -32,7 +32,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-44 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+45 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -40,7 +40,8 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 → synthetic data & auto-labeling → incremental smoothing → particle-filter localization
 → an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
 patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
-identification loop on published UR5 parameters → registration validated on real laser scans.**
+identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
+spatial upgrade of the whole chain.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -86,6 +87,7 @@ identification loop on published UR5 parameters → registration validated on re
 | 42 | **image-guided targeting capstone** (39+40+41) | end-to-end **16.4 → 0.09 mm**; budget rank flips with calibration; unsafe plans 37% → **3.8%** |
 | 43 | **sim-to-real loop** on a surgical arm (real UR5 params) | deploy→detect→identify→redeploy: **45.9 → 0.003 mm**; structural gap plateaus at 0.21 mm |
 | 44 | **registration on real laser scans** (Stanford Bunny) | pose recovered to 0.11°/0.16 mm; the σ gate **fails to transfer** (85% → 5%), consistency holds at 84% |
+| 45 | **6-DOF image-guided targeting** (spatial UR5 + real scan) | TRE 0.08 mm / 0.13°; PD droops 50 mm & 12°; a point-tool check is blind to the shaft cutting at 9.7° |
 
 ## Experiments
 
@@ -1026,6 +1028,48 @@ small surface patch), scoring unsafe as TRE > 3 mm:
 
 ![real scan registration](assets/44_registration_real_scans.png)
 
+### 45. 6-DOF image-guided targeting (`scripts/45_image_guided_6dof.py`)
+Experiment 42 ran the whole chain on a **planar slice with a 2-link arm**. That simplification hides two
+things, and this experiment exists to expose them: a real tool has an **orientation** to satisfy, and it is a
+**segment, not a point**. The arm is now the full spatial **UR5 6-DOF** built from published DH, masses and
+COMs (`src/sensor_fusion/ur5.py`), and the phantom is the **real Bunny scan** from #44 — the registration
+pipeline is reused unchanged.
+
+The dynamics core is implemented twice on purpose: a Lagrangian assembly (M from link Jacobians, g from the
+potential gradient, C from numerically-differentiated Christoffel symbols — easy to read, easy to check) and a
+standard **RNEA** recursion (O(n), used for simulation). They agree to 1e-10, M matches to 1e-15, and energy is
+conserved to 1e-6 with zero input — three independent checks on the same physics. A convention trap is recorded
+in the code: with **standard** DH, joint *i* rotates about frame *i−1*'s z, so Craig's modified-DH backward
+recursion silently corrupts exactly those links with a nonzero link offset (links 2–3 here).
+
+| stage | result |
+|--|--|
+| setup error if the nominal placement is assumed | 65.0 mm |
+| registration on the real scan (ICP refines the coarse setup) | TRE **0.081 mm**, **0.132°**, FRE 0.382 mm |
+| 6-DOF IK (position + orientation along the path) | residual < 0.01 µm / 0.01 arcsec, manipulability ≥ 0.064 |
+| PD only | droops **50.4 mm**, tool axis off by **12.1°** |
+| PD + gravity compensation | servo share 0.012 mm |
+| **computed torque** (UR5 M·C·g) | servo share **0.000 mm** — 412× tighter; registration dominates again |
+
+- Going spatial changes the control story: on the planar 2-link arm PD merely sagged, but on a 6-axis arm with
+  an 8.4 kg link **the tool orientation collapses too** (12°). It also forces per-joint gain scaling — effective
+  joint inertias span 2.4 → 1e-4 kg·m², so uniform gains put the wrist at ω ≈ 2000 rad/s and blow the
+  integration up. All three controllers here target the same ω = 20 rad/s.
+- The orientation constraint costs manipulability, and *where you place the patient* decides how much: with an
+  arbitrary phantom placement the required tool axis drove the arm to w ≈ 0.006 (nearly singular); aligning the
+  planned insertion axis with the reference posture's tool axis keeps w ≥ 0.064. The spin about the tool axis is
+  a genuine free DOF, so it is spent maximizing manipulability — exp 39's null-space idea in 6-DOF form.
+- **The failure a planar experiment cannot represent.** With a point tool, clearance to the vessel is 8.1 mm and
+  is *independent of orientation* — the check carries no information. The real tool shaft starts with 2.17 mm of
+  clearance and loses **0.24 mm per degree** of axis error, cutting the vessel at **9.7°** while the tip-only
+  check still reports 8.1 mm. Here the measured registration error (0.13°) leaves a 74× margin, so this corridor
+  is safe — the point is that the threshold exists at all, and only a 6-DOF model can see it.
+- Honest scope: the Bunny is not anatomy (as in #44); inertia tensors are an explicit uniform-cylinder
+  approximation; no tissue reaction force or needle bending; the roll search is a 12-point grid, not a
+  constrained continuous optimization.
+
+![6-DOF targeting](assets/45_image_guided_6dof.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1081,6 +1125,7 @@ python scripts/41_surgical_registration.py   # surgical patient-to-image registr
 python scripts/42_image_guided_targeting.py  # capstone: registration→IK→control error budget
 python scripts/43_sim_to_real_arm.py         # sim-to-real loop: identify payload/friction (UR5 params)
 python scripts/44_registration_real_scans.py # real Stanford Bunny scans (downloads to data_cache/)
+python scripts/45_image_guided_6dof.py       # 6-DOF: spatial UR5 + real-scan phantom
 pytest -q
 ```
 
@@ -1136,6 +1181,8 @@ scripts/
   42_image_guided_targeting.py  capstone: registration→plan→IK→computed torque, error budget + safety gate
   43_sim_to_real_arm.py         sim-to-real loop: deploy→detect→identify→redeploy (UR5 published params)
   44_registration_real_scans.py registration on real Stanford Bunny scans (gate transfer test)
+  45_image_guided_6dof.py       6-DOF targeting: spatial UR5 + real-scan phantom, tool-shaft safety
+src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 ros2/kalman_fusion_sim/        Gazebo sim front-end + no-Gazebo mock driver (feeds the fusion node)
@@ -1234,6 +1281,7 @@ well-formedness.
 - [x] Image-guided targeting capstone: end-to-end error budget + covariance/consistency safety gate
 - [x] Sim-to-real loop on the arm: deploy → detect → identify (linear-in-parameters) → redeploy, on UR5 specs
 - [x] Registration validated on real laser scans (Stanford Bunny) — safety-gate transfer test
+- [x] 6-DOF upgrade: spatial UR5 (published DH/inertia, Lagrangian + RNEA) driving the image-guided chain
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
