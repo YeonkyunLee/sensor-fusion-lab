@@ -27,19 +27,20 @@ one keeps balancing (`dr_demo.html`, no libraries).
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-📓 **Write-ups:** a 6-part blog series (incl. an EKF-SLAM debugging journey & the surgical-arm error budget) —
+📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-42 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+44 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
 → a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
 → synthetic data & auto-labeling → incremental smoothing → particle-filter localization
 → an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
-patient-to-image registration → an image-guided targeting capstone with a full error budget.**
+patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
+identification loop on published UR5 parameters → registration validated on real laser scans.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -83,6 +84,8 @@ patient-to-image registration → an image-guided targeting capstone with a full
 | 40 | **manipulator dynamics** + computed torque | model-based control **99.8%** tighter than PD (0.086 → 0.00008 m EE error) |
 | 41 | **surgical patient-to-image registration** (medical) | TRE **0.20 mm**; low FRE with 31 mm TRE exposes the misregistration trap |
 | 42 | **image-guided targeting capstone** (39+40+41) | end-to-end **16.4 → 0.09 mm**; budget rank flips with calibration; unsafe plans 37% → **3.8%** |
+| 43 | **sim-to-real loop** on a surgical arm (real UR5 params) | deploy→detect→identify→redeploy: **45.9 → 0.003 mm**; structural gap plateaus at 0.21 mm |
+| 44 | **registration on real laser scans** (Stanford Bunny) | pose recovered to 0.11°/0.16 mm; the σ gate **fails to transfer** (85% → 5%), consistency holds at 84% |
 
 ## Experiments
 
@@ -951,6 +954,78 @@ The scenario is a narrow exposure where even the best available corridor passes 
 
 ![image-guided targeting](assets/42_image_guided_targeting.png)
 
+### 43. Sim-to-real loop on a surgical arm (`scripts/43_sim_to_real_arm.py`)
+Experiment 42 ended on an uncomfortable note: swapping a tool introduces a payload error that makes the servo
+dominate the budget, and the answer was "go calibrate". This experiment **automates that** as a closed loop —
+the manipulator version of #31 (SimOpt): prepare in sim → deploy → the system flags itself (tracking residual
+over threshold) → run an excitation trajectory → identify → update the controller model → redeploy.
+
+Identification works because rigid-body dynamics is **linear in the inertial parameters**, friction included:
+`τ = Y(q,q̇,q̈)·π` with `π = [a, b, d, G1, G2, fv₁, fv₂, fc₁, fc₂]`. An unknown tool mass, a shifted centre of
+mass and unmodelled joint friction all land inside π, so one regression recovers them. The arm is **not
+invented**: link lengths, masses and COMs are Universal Robots' published UR5 figures for joints 2–3, which
+physically *do* form a planar 2R arm in a vertical plane (rotational inertia is an explicitly-stated uniform-rod
+approximation).
+
+| loop iteration | target error | tracking residual | ‖π̂ − π‖ |
+|--|----------:|----------:|----------:|
+| 0 — nominal model deployed | 45.855 mm | 46.048 mm (**flagged**) | 1.98 |
+| 1 — one excitation run identified | 0.007 mm | 0.019 mm | 0.084 |
+| 3 — accumulated logs | **0.003 mm** | 0.026 mm | 0.061 |
+
+- The loop recovers the payload to **0.02%** (via G2) and Coulomb friction to [1.75, 0.88] vs the true
+  [1.8, 0.9] — parameters the nominal model did not even have terms for. In exp-42 budget terms the servo share
+  goes from 488× the registration share back to 0.03×, i.e. **the loop restores the budget ranking**.
+- **Parametric vs structural gap.** Add Stribeck stiction to the real plant — a term with no column in the
+  regressor — and the same loop **plateaus at 0.207 mm** (62× worse), still above the 94 µm registration share.
+  No amount of re-identification absorbs physics the model lacks; the loop's honest output is "something
+  remains", and the next move is extending the model structure, not another regression.
+- **Observability.** Identifying from the slow clinical insertion alone gives cond(YᵀY) 2.1e3 and 0.139 mm;
+  a dedicated multi-sine excitation gives 1.9e2 and 0.003 mm — 46× better. The repo's recurring theme (IMU
+  bias, EKF-SLAM heading) reappears: you can only identify what the data excites.
+- Honest scope: the "real" plant is still a simulation — deliberately mismatched in parameters *and* missing
+  terms, but free of backlash, joint elasticity and gear nonlinearity. Derivatives for identification come from
+  a zero-phase filter (legitimate offline, unlike a real-time control filter — see #22).
+
+![sim-to-real arm](assets/43_sim_to_real_arm.png)
+
+### 44. Registration validated on real laser scans (`scripts/44_registration_real_scans.py`)
+Experiments 41/42 built the registration pipeline and its reliability gates on **synthetic** anatomy — smooth
+curvature, isotropic Gaussian noise, no holes. This runs the *unmodified* pipeline on the **Stanford Bunny**
+(Turk & Levoy, 1994): two real range scans (bun000, bun045) with the dataset's own alignment, real partial
+overlap, anisotropic scanner noise and missing regions. Data is downloaded at runtime into `data_cache/`
+(gitignored — not redistributed).
+
+| quantity | result |
+|--|--|
+| dataset self-alignment (median NN between conf-aligned scans) | 0.326 mm — the data's own floor |
+| recovering an applied unknown SE(3) | **0.106° / 0.161 mm**, TRE **0.048 mm** |
+| TRE vs probed points | 150 → 0.133 mm, 300 → 0.121, 800 → 0.074, 2000 → **0.066** |
+
+The interesting part is the **negative transfer of the safety gate**. Over 40 randomized trials (half with a
+small surface patch), scoring unsafe as TRE > 3 mm:
+
+| reliability signal | detection | false alarm | unsafe among executed |
+|--|----------:|----------:|----------:|
+| naive (always execute) | — | — | **47.5%** |
+| ① k·σ from the information matrix | **5.3%** | 0.0% | 46.2% |
+| ② multi-start consistency | **84.2%** | 0.0% | 12.5% |
+| ③ overlap (inlier fraction) | 36.8% | 0.0% | 36.4% |
+| ①+②+③ | 84.2% | 0.0% | 12.5% |
+
+- The covariance gate that caught 85% of bad registrations on synthetic anatomy catches **5%** here. On real
+  geometry the failures are not ill-conditioning — they are ICP settling into a *wrong basin* with a perfectly
+  healthy residual and a perfectly confident covariance. Only the consistency check sees them.
+- That is a retroactive argument for keeping both signals in #42, and a caution about tuning safety logic on
+  synthetic data: **the signal that works can change when the geometry becomes real.**
+- FRE and TRE correlate well here (r = 0.92) — but 2 of 19 unsafe cases had FRE at the noise floor. FRE is a
+  useful first screen, not a certificate.
+- Honest scope: the Bunny is not anatomy; what transfers is the *point-cloud* character (partial overlap,
+  anisotropic noise, holes, uneven curvature). The conf alignment is itself an estimate, so no claim is made
+  below ~0.3 mm absolute; the 0.048 mm figure is recovery of a perturbation we applied, a different quantity.
+
+![real scan registration](assets/44_registration_real_scans.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1004,6 +1079,8 @@ python scripts/39_manipulator_kinematics.py  # manipulator FK/Jacobian/IK/singul
 python scripts/40_manipulator_dynamics.py    # manipulator dynamics + computed torque
 python scripts/41_surgical_registration.py   # surgical patient-to-image registration (ICP)
 python scripts/42_image_guided_targeting.py  # capstone: registration→IK→control error budget
+python scripts/43_sim_to_real_arm.py         # sim-to-real loop: identify payload/friction (UR5 params)
+python scripts/44_registration_real_scans.py # real Stanford Bunny scans (downloads to data_cache/)
 pytest -q
 ```
 
@@ -1057,6 +1134,8 @@ scripts/
   40_manipulator_dynamics.py    2-link arm dynamics + computed-torque control
   41_surgical_registration.py   patient-to-image registration via point-to-plane ICP (FRE vs TRE)
   42_image_guided_targeting.py  capstone: registration→plan→IK→computed torque, error budget + safety gate
+  43_sim_to_real_arm.py         sim-to-real loop: deploy→detect→identify→redeploy (UR5 published params)
+  44_registration_real_scans.py registration on real Stanford Bunny scans (gate transfer test)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 ros2/kalman_fusion_sim/        Gazebo sim front-end + no-Gazebo mock driver (feeds the fusion node)
@@ -1153,6 +1232,8 @@ well-formedness.
 - [x] Manipulator dynamics + computed-torque control (Lagrangian M/C/g, model-error sensitivity)
 - [x] Medical: surgical patient-to-image registration via point-to-plane ICP (FRE vs TRE, convergence basin)
 - [x] Image-guided targeting capstone: end-to-end error budget + covariance/consistency safety gate
+- [x] Sim-to-real loop on the arm: deploy → detect → identify (linear-in-parameters) → redeploy, on UR5 specs
+- [x] Registration validated on real laser scans (Stanford Bunny) — safety-gate transfer test
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
