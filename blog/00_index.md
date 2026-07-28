@@ -20,6 +20,7 @@ DSP 알고리즘 엔지니어가 **추정이론으로 로봇 상태추정에 발
 | [3](03_ekf_slam_debugging.md) | EKF-SLAM 디버깅 여정 | 오도메트리 대비 17배; **8번의 실패와 그 원인** |
 | [4](04_safe_autonomy_medical.md) | 안전한 자율성 — 수술 No-Fly-Zone | 불확실도-인지 세이프스톱, 침범률 60%→0% |
 | [5](05_medical_robotics_thread.md) | 의료·재활 로봇 갈래 — 추정이론의 세 이식 | No-Fly-Zone 60%→0%, 수전증 FLC 10.7×, 보행 ZUPT ~41× (라이브 데모) |
+| [6](06_surgical_arm_error_budget.md) | 수술 로봇 팔 — 기구학·동역학·정합과 오차 예산 | 엔드투엔드 16.4mm→0.09mm, 예산 순위는 캘리브레이션으로 역전, 안전게이트 37%→3.8% |
 
 (그 외 저장소 실험: 그래프 SLAM(루프클로저 5×), VIO(IMU+시각 3×) — README 참고)
 

@@ -27,19 +27,19 @@ one keeps balancing (`dr_demo.html`, no libraries).
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-📓 **Write-ups:** a 5-part blog series (incl. an EKF-SLAM debugging journey & a medical-robotics thread) —
+📓 **Write-ups:** a 6-part blog series (incl. an EKF-SLAM debugging journey & the surgical-arm error budget) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-41 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+42 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
 → a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
 → synthetic data & auto-labeling → incremental smoothing → particle-filter localization
 → an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
-patient-to-image registration.**
+patient-to-image registration → an image-guided targeting capstone with a full error budget.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -82,6 +82,7 @@ patient-to-image registration.**
 | 39 | **manipulator kinematics** (FK · J · IK · singularity) | DLS-IK 0.001 mm in 6 iters; bounded 0.09 rad step where pseudo-inverse blows up to **20.9 rad** |
 | 40 | **manipulator dynamics** + computed torque | model-based control **99.8%** tighter than PD (0.086 → 0.00008 m EE error) |
 | 41 | **surgical patient-to-image registration** (medical) | TRE **0.20 mm**; low FRE with 31 mm TRE exposes the misregistration trap |
+| 42 | **image-guided targeting capstone** (39+40+41) | end-to-end **16.4 → 0.09 mm**; budget rank flips with calibration; unsafe plans 37% → **3.8%** |
 
 ## Experiments
 
@@ -905,6 +906,51 @@ the surface probed), 0.5 mm digitization noise, and a few gross outliers.
 
 ![surgical registration](assets/41_surgical_registration.png)
 
+### 42. Image-guided targeting capstone — the error budget (`scripts/42_image_guided_targeting.py`)
+Experiments 39–41 each covered one link. A real image-guided robot runs them **in series**, and the patient
+only experiences the number at the end of the chain: how far the tool tip lands from the planned target. This
+capstone connects them — plan in image coordinates → probe the surface → register (SE(2) point-to-normal ICP)
+→ map the plan into robot coordinates → DLS IK → computed-torque tracking — and decomposes the final error.
+The scenario is a narrow exposure where even the best available corridor passes **3.0 mm** from a vessel.
+
+| condition | end-to-end | registration share | servo share |
+|--|----------:|----------:|----------:|
+| A no registration (nominal placement assumed) + computed torque | 16.441 mm | 16.441 | ~0 |
+| B registration + PD | 12.178 mm | 0.094 | 12.227 |
+| C registration + computed torque (3% payload error) | 0.990 mm | 0.094 | 0.949 |
+| **D registration + computed torque (calibrated)** | **0.094 mm** | 0.094 | ~0 |
+| E oracle registration + calibrated CT (floor) | ~0 (numerical) | 0 | 6 µm max path deviation |
+
+- Registration buys **175×** (A→D) and model-based control **130×** (B→D) — but the headline is that **the
+  budget's ranking flips with calibration state**. On the calibrated arm the 94 µm is essentially all
+  registration, so the next investment is the tracker/coverage; introduce a mere **3% payload error** and the
+  servo share jumps to 0.949 mm — **10× the registration error** — and calibration becomes priority one. Same
+  hardware, opposite answer: you cannot pick what to improve without measuring the budget.
+- **Safety.** ICP also yields a covariance: `Cov(ξ) ≈ σ²(JᵀJ)⁻¹`, propagated to the target as σ_target, which
+  grows when surface coverage is poor. Over 200 randomized trials (coverage 70–260°, random pose/noise),
+  scoring **unsafe = vessel violation OR target miss > 2 mm** (counting violations alone would score a grossly
+  misregistered path that stabs *outside* the anatomy as "safe"):
+
+| planning rule | detection | false alarm | unsafe among executed |
+|--|----------:|----------:|----------:|
+| naive (always execute) | — | — | **37.0%** |
+| k·σ gate (conditioning) | 85.1% | 0.0% | 8.0% |
+| **+ multi-start consistency** | **93.2%** | 0.8% | **3.8%** |
+
+- The residual failures under the σ gate alone are instructive: σ of 0.09–0.43 mm (looks fine) with TRE of
+  16–39 mm — **confidently wrong** fits. A covariance says how well-determined a solution is, not whether a
+  *different basin* fits comparably well. Re-running ICP from several initializations and flagging when
+  near-equal-residual rivals disagree about the target catches those. All 70 aborted plans recovered after
+  re-probing with wider coverage.
+- Honest negatives: using multi-start to *pick* the lowest-residual solution made things **worse** (with
+  partial coverage a slid-along-the-surface misfit can score lower residual), so it is used for verification
+  only; the rival-residual threshold trades detection against false alarms (1.05 → 1%, 1.15 → 4%, 1.3 → 21%,
+  1.5 → 41% false alarms); and 3.8% unsafe still survives both gates. Scope is a planar (SE(2)) slice with a
+  2-link arm, rigid registration, and no needle bending or tissue reaction force — that term would grow the
+  servo share.
+
+![image-guided targeting](assets/42_image_guided_targeting.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -957,6 +1003,7 @@ python scripts/38_model_based_rl.py   # model-based RL (learned dynamics + MPC)
 python scripts/39_manipulator_kinematics.py  # manipulator FK/Jacobian/IK/singularity
 python scripts/40_manipulator_dynamics.py    # manipulator dynamics + computed torque
 python scripts/41_surgical_registration.py   # surgical patient-to-image registration (ICP)
+python scripts/42_image_guided_targeting.py  # capstone: registration→IK→control error budget
 pytest -q
 ```
 
@@ -1009,6 +1056,7 @@ scripts/
   39_manipulator_kinematics.py  3R arm: FK, Jacobian, DLS-IK, singularity, redundancy
   40_manipulator_dynamics.py    2-link arm dynamics + computed-torque control
   41_surgical_registration.py   patient-to-image registration via point-to-plane ICP (FRE vs TRE)
+  42_image_guided_targeting.py  capstone: registration→plan→IK→computed torque, error budget + safety gate
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 ros2/kalman_fusion_sim/        Gazebo sim front-end + no-Gazebo mock driver (feeds the fusion node)
@@ -1104,6 +1152,7 @@ well-formedness.
 - [x] Manipulator kinematics: FK, analytic Jacobian, DLS inverse kinematics, singularities, null-space redundancy
 - [x] Manipulator dynamics + computed-torque control (Lagrangian M/C/g, model-error sensitivity)
 - [x] Medical: surgical patient-to-image registration via point-to-plane ICP (FRE vs TRE, convergence basin)
+- [x] Image-guided targeting capstone: end-to-end error budget + covariance/consistency safety gate
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
