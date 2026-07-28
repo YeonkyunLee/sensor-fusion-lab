@@ -27,18 +27,19 @@ one keeps balancing (`dr_demo.html`, no libraries).
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-📓 **Write-ups:** a 4-part blog series (incl. an EKF-SLAM debugging journey & medical safe-autonomy) —
+📓 **Write-ups:** a 5-part blog series (incl. an EKF-SLAM debugging journey & a medical-robotics thread) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-38 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+41 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
 → a navigation capstone & 3D LiDAR SLAM → learning-based control & sim-to-real → hybrid RL
 → synthetic data & auto-labeling → incremental smoothing → particle-filter localization
-→ an error-state KF → model-based RL.**
+→ an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
+patient-to-image registration.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -78,6 +79,9 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 | 36 | **Monte Carlo Localization** (particle filter) | **11.9×** over odometry; global/kidnapped, ring posterior |
 | 37 | **error-state KF** (ESKF) for attitude | gyro-only 28.5° → ESKF **0.48°** (60×), bias estimated online |
 | 38 | **model-based RL** (learned dynamics + MPC) | 98% of oracle at 480 transitions; **~473×** more data-efficient than model-free |
+| 39 | **manipulator kinematics** (FK · J · IK · singularity) | DLS-IK 0.001 mm in 6 iters; bounded 0.09 rad step where pseudo-inverse blows up to **20.9 rad** |
+| 40 | **manipulator dynamics** + computed torque | model-based control **99.8%** tighter than PD (0.086 → 0.00008 m EE error) |
+| 41 | **surgical patient-to-image registration** (medical) | TRE **0.20 mm**; low FRE with 31 mm TRE exposes the misregistration trap |
 
 ## Experiments
 
@@ -833,6 +837,74 @@ transitions, against a model-free CEM policy-search baseline (same budget) and a
 
 ![mbrl](assets/38_model_based_rl.png)
 
+### 39. Manipulator kinematics — FK, Jacobian, IK, singularities, redundancy (`scripts/39_manipulator_kinematics.py`)
+Everything so far has been a **mobile** robot. Surgical and lab robots are articulated **arms**, and the
+foundation is manipulator kinematics: getting the tool tip to a commanded pose. A 3-link planar (3R) arm, built
+from scratch: forward kinematics (link composition), the analytic **Jacobian** (position rows by differentiating
+FK, orientation row trivial), iterative **IK** by damped least squares `dq = Jᵀ(JJᵀ + λ²I)⁻¹e`, and the two
+phenomena that make arms interesting — singularities and redundancy.
+
+| aspect | result |
+|--|--|
+| analytic Jacobian vs finite differences | max error **1.4e-10** (derivation verified) |
+| DLS inverse kinematics | 0.001 mm position error in **6** iterations |
+| singular pose (arm straight) | manipulability `w = sqrt(det(J_p J_pᵀ))` → **0** (rank loss) |
+| near-singular step: DLS vs pseudo-inverse | **0.086 rad** (bounded, 0.1 mm residual) vs **20.9 rad** (blows up) |
+| redundancy (3 DOF for a 2D target) | 4 distinct elbow branches reach the same tip |
+| null-space secondary objective | ‖q − q_home‖ 1.70 → **1.49** with the tip held fixed (0.87 mm) |
+
+- The damping λ is the whole story near singularities: the pseudo-inverse is "exact" right up to the point where
+  it commands 20 rad of joint motion, while DLS trades a little tracking accuracy for a bounded, executable step.
+- Redundancy is the mechanism behind clinically useful behaviors: the arm performs **self-motion** (0.93 rad
+  through the null space) to reach a more comfortable posture *without moving the tool* — the same trick used to
+  keep an arm away from the patient/assistants while holding the instrument still.
+
+![manipulator kinematics](assets/39_manipulator_kinematics.png)
+
+### 40. Manipulator dynamics + computed-torque control (`scripts/40_manipulator_dynamics.py`)
+The other half of an arm: mass and inertia. The rigid-body manipulator equation `M(q)q̈ + C(q,q̇)q̇ + g(q) = τ`
+is derived from the Lagrangian for a 2-link planar arm (inertia matrix, Coriolis/centrifugal coupling, gravity)
+and integrated with RK4. Three controllers track the same joint trajectory at identical gains, so the only
+variable is **how much of the model the controller knows**.
+
+| controller | joint RMSE | end-effector RMSE |
+|--|----------:|----------:|
+| PD only | 0.02861 rad | 0.08561 m |
+| PD + gravity compensation | 0.01179 rad | 0.03348 m |
+| **computed torque** (inverse dynamics) | **0.00006 rad** | **0.00008 m** |
+
+- Feeding the model forward is worth **99.8%** of the tracking error: computed torque cancels gravity, coupling
+  and configuration-dependent inertia, leaving the PD term to regulate a linear, decoupled error system.
+- Honest caveat, and the reason robust/adaptive control exists: with a **+20% mass error** the computed-torque
+  controller degrades to 0.00599 rad — **103× worse** than with the exact model, though still better than PD.
+  Model-based control is only as good as the model.
+
+![manipulator dynamics](assets/40_manipulator_dynamics.png)
+
+### 41. Surgical patient-to-image registration (`scripts/41_surgical_registration.py`)
+The prerequisite step of image-guided surgery: aligning the pre-op CT/MR anatomy model with the patient on the
+table, so a target planned in the image can be expressed in robot/tool coordinates. That is a 6-DOF SE(3)
+estimation problem solved with **ICP** — here reusing the 3D point-to-plane machinery from exp 21/29 (k-NN PCA
+normals, se(3) tangent-space linearization) against a realistic intra-op point cloud: partial coverage (255° of
+the surface probed), 0.5 mm digitization noise, and a few gross outliers.
+
+| metric | result |
+|--|----------:|
+| recovered SE(3) error | **0.179 mm** translation, **0.608°** rotation |
+| surface residual (FRE) | 0.793 mm |
+| **TRE** at planned targets | mean **0.203 mm**, max 0.293 mm |
+| bad initialization | TRE **31.51 mm** — with FRE only 1.64 mm |
+| correspondence gate on / off | TRE **0.22 mm** vs **8.85 mm** |
+
+- **FRE is not TRE.** The bad-initialization case converges to a plausible-looking fit (FRE 1.64 mm) while the
+  actual target error is 31 mm — the classic clinical trap, since FRE is what you can measure intra-op and TRE
+  is what the patient experiences. Hence the coarse centroid pre-alignment: ICP only guarantees a *local*
+  optimum, so getting inside the convergence basin is a safety requirement, not a convenience.
+- Outlier rejection is not optional either: a single mis-probed point drags an unguarded least-squares fit to
+  8.85 mm TRE, a 40× degradation, which the distance gate removes.
+
+![surgical registration](assets/41_surgical_registration.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -882,6 +954,9 @@ python scripts/35_incremental_smoothing.py  # incremental smoothing (iSAM-style)
 python scripts/36_particle_filter.py  # Monte Carlo Localization (particle filter)
 python scripts/37_error_state_kf.py   # error-state KF (ESKF) for attitude
 python scripts/38_model_based_rl.py   # model-based RL (learned dynamics + MPC)
+python scripts/39_manipulator_kinematics.py  # manipulator FK/Jacobian/IK/singularity
+python scripts/40_manipulator_dynamics.py    # manipulator dynamics + computed torque
+python scripts/41_surgical_registration.py   # surgical patient-to-image registration (ICP)
 pytest -q
 ```
 
@@ -931,6 +1006,9 @@ scripts/
   36_particle_filter.py  Monte Carlo Localization (nonparametric, range-only)
   37_error_state_kf.py   error-state KF (ESKF) for 3D attitude (gyro+accel+mag)
   38_model_based_rl.py   model-based RL: learned dynamics model + MPC planning
+  39_manipulator_kinematics.py  3R arm: FK, Jacobian, DLS-IK, singularity, redundancy
+  40_manipulator_dynamics.py    2-link arm dynamics + computed-torque control
+  41_surgical_registration.py   patient-to-image registration via point-to-plane ICP (FRE vs TRE)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
 ros2/kalman_fusion_sim/        Gazebo sim front-end + no-Gazebo mock driver (feeds the fusion node)
@@ -1023,6 +1101,9 @@ well-formedness.
 - [x] ROS2 node wrapping the filter (`ros2/kalman_fusion/` — ROS-free testable core + rclpy-guarded node)
 - [x] Gazebo simulation front-end (`ros2/kalman_fusion_sim/` — gz sim world + no-Gazebo mock driver)
 - [x] Model-based RL: learned dynamics model + MPC planning (sample-efficiency vs model-free)
+- [x] Manipulator kinematics: FK, analytic Jacobian, DLS inverse kinematics, singularities, null-space redundancy
+- [x] Manipulator dynamics + computed-torque control (Lagrangian M/C/g, model-error sensitivity)
+- [x] Medical: surgical patient-to-image registration via point-to-plane ICP (FRE vs TRE, convergence basin)
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
