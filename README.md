@@ -27,6 +27,10 @@ one keeps balancing (`dr_demo.html`, no libraries).
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
+🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 48 experiments as an
+8-stage study guide (Korean): what question each stage answers, what to run, what to look for, and the
+mistakes beginners hit — no derivations required.
+
 📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
@@ -1187,7 +1191,8 @@ resulting curvature gives the 3D centerline, which is then measured against the 
 
 ## Quickstart
 ```bash
-pip install numpy matplotlib pytest
+pip install numpy matplotlib scipy pytest    # scipy: KD-trees, sparse solves, filtering
+                                             # (torch is optional — only experiment 16)
 python scripts/01_tracking.py       # linear KF tracking
 python scripts/02_imu_fusion.py     # position + IMU fusion with outage
 python scripts/03_ctrv_ekf_ukf.py   # nonlinear CTRV: EKF vs UKF

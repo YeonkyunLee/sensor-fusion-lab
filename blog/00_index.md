@@ -36,7 +36,7 @@ DSP 알고리즘 엔지니어가 **추정이론으로 로봇 상태추정에 발
 
 ## 재현
 ```bash
-pip install numpy matplotlib pytest
+pip install numpy matplotlib scipy pytest
 python scripts/01_tracking.py
 python scripts/02_imu_fusion.py
 python scripts/03_ctrv_ekf_ukf.py
