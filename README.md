@@ -32,7 +32,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-45 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+47 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -41,7 +41,8 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 → an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
 patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
-spatial upgrade of the whole chain.**
+spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact and
+impedance control.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -88,6 +89,8 @@ spatial upgrade of the whole chain.**
 | 43 | **sim-to-real loop** on a surgical arm (real UR5 params) | deploy→detect→identify→redeploy: **45.9 → 0.003 mm**; structural gap plateaus at 0.21 mm |
 | 44 | **registration on real laser scans** (Stanford Bunny) | pose recovered to 0.11°/0.16 mm; the σ gate **fails to transfer** (85% → 5%), consistency holds at 84% |
 | 45 | **6-DOF image-guided targeting** (spatial UR5 + real scan) | TRE 0.08 mm / 0.13°; PD droops 50 mm & 12°; a point-tool check is blind to the shaft cutting at 9.7° |
+| 46 | closing the **structural gap** (#43's plateau) | extra structure alone barely helps (0.208 → 0.162 mm); **+ low-speed excitation → 0.002 mm** |
+| 47 | **needle–tissue contact**: position vs impedance control | stiff = accurate (1.35 mm) but lunges 0.67 mm through the puncture; soft = 0 lunge, 4.67 mm |
 
 ## Experiments
 
@@ -1070,6 +1073,73 @@ recursion silently corrupts exactly those links with a nonzero link offset (link
 
 ![6-DOF targeting](assets/45_image_guided_6dof.png)
 
+### 46. Closing the structural gap (`scripts/46_closing_structural_gap.py`)
+Experiment 43 ended with an open promise: the sim-to-real loop closed the *parametric* gap (45.9 → 0.003 mm)
+but stalled at **0.207 mm** against a *structural* one — Stribeck stiction, a term with no column in the
+regressor. Its honest output was "extend the model, don't re-identify". This experiment does that and measures
+what actually happens.
+
+The extension is separable: `fs` enters linearly but the Stribeck velocity `vs` sits inside an exponential, so
+`vs` is grid-searched **outside** while the 11-parameter least squares runs inside.
+
+| attempt | vs found | fs estimate (true [1.44, 0.72]) | target error |
+|--|--|--|----------:|
+| exp 43 model (9 params) | — | — | 0.208 mm (plateau) |
+| + structure only, same fast logs | 0.020 | [−0.51, 0.25] — **not identified** | 0.162 mm |
+| **+ structure + low-speed excitation** | **0.050** (true 0.05) | [1.29, 0.58] | **0.002 mm** |
+
+- **Structure alone is not enough.** Stiction only switches on below |q̇| < 0.05 rad/s, and the multi-sine
+  excitation from #43 races through that band — the new parameters are unidentifiable no matter how many logs
+  are stacked. Adding a deliberately *slow* trajectory (50% of its samples inside the stiction regime) recovers
+  `vs` exactly and drops the error 85×, down to the no-structural-gap floor. Extending a model and designing the
+  experiment that excites it are one move, not two.
+- The grid search is itself a check: the torque residual is minimized exactly at the true `vs` (0.182 N·m,
+  rising to 0.24–0.25 at 0.02 / 0.15), so the nonlinear parameter is observable once the data covers the regime.
+- **The cost of extending.** Run the 11-parameter model on a plant that has *no* stiction and it is **10×
+  worse** than the correct 9-parameter model (1.7 µm vs 0.2 µm) — the redundant parameters fit noise. Bigger
+  models are not free; the loop should tell you when to grow, and this is why.
+- Honest scope: the structure was extended *knowing* the answer. In practice one reads the residual pattern
+  (errors concentrated near velocity reversals) to propose the candidate. Real stiction also has hysteresis and
+  dwell-time dependence that a Stribeck curve does not capture, and grid search stops scaling once several
+  nonlinear parameters are in play.
+
+![closing the structural gap](assets/46_closing_structural_gap.png)
+
+### 47. Needle–tissue contact: position vs impedance control (`scripts/47_needle_impedance.py`)
+Everything up to #45 assumed **free space**. The moment the tool touches tissue the robot and the environment
+push on each other, and "track the trajectory no matter what" — a virtue in free space — becomes a hazard. This
+adds a needle–tissue interaction model to the 6-DOF chain and compares two control philosophies on the same
+insertion. The tissue model reproduces the *structure* reported in needle-insertion mechanics (nonlinear
+pre-puncture stiffening → discontinuous breakthrough → cutting + depth-proportional friction) at literature
+magnitudes; it is not a reproduction of any specific published dataset.
+
+| controller | target error | peak force | puncture lunge |
+|--|----------:|----------:|----------:|
+| position (joint-space computed torque) | **1.349 mm** | 3.97 N | **0.655 mm** |
+| impedance, K_eff 764 N/m | 4.665 mm | 4.10 N | **0.000 mm** |
+
+- Peak force is set by the **tissue** (both controllers reach the ~4 N puncture threshold), so force alone does
+  not separate the two. The difference appears at breakthrough: when the surface gives way, the stiff controller
+  drives the tip **0.65 mm deeper than planned**; the compliant one does not lunge at all. Measuring this
+  required fixing the metric — absolute position always reads negative under load (the tip lags), so the lunge
+  must be measured as *excess advance relative to the puncture instant*.
+- The stiffness sweep is the trade-off curve: K_eff 382 → 3056 N/m moves target error 9.1 → 1.35 mm while lunge
+  goes 0.00 → 0.67 mm. With no constraint the stiffest wins on accuracy; impose a 0.5 mm lunge budget and the
+  operating point moves to K_eff 764 N/m. **The clinical constraint picks the gain, not the other way round.**
+- Implementation note worth recording: the textbook-looking `τ = Jᵀ(K e + D ė)` impedance **diverges** on this
+  arm. The needle's spin about its own axis has an apparent inertia of 1.2e-4 kg·m², so inertia coupling excites
+  it at ω ≈ 1400 rad/s (16× growth per step) — projecting the axial component out is not enough, because Λ is
+  not diagonal. Operational-space control, `τ = JᵀΛ(ẍ_d + Kp e + Kd ė − J̇q̇) + Cq̇ + g`, normalizes the inertia
+  so every direction closes at √Kp and the problem disappears.
+- **The budget gains a third term.** Free-space servo error was ~0 (#45) and registration 0.081 mm; under
+  contact the interaction term is 1.3–4.7 mm — an order of magnitude above both. Once the tool touches tissue,
+  the answer to "what should I improve" changes again.
+- Honest scope: soft gains (Kp < 100) needed a 1 ms integration step — verified numerical, not physical, since
+  Kp = 100 gives 4.75 vs 4.76 mm at 4 ms and 1 ms. No needle bending (a flexible needle would eat into #45's
+  shaft clearance), ideal force sensing, and impedance is imposed on the tip only.
+
+![needle impedance](assets/47_needle_impedance.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1126,6 +1196,8 @@ python scripts/42_image_guided_targeting.py  # capstone: registration→IK→con
 python scripts/43_sim_to_real_arm.py         # sim-to-real loop: identify payload/friction (UR5 params)
 python scripts/44_registration_real_scans.py # real Stanford Bunny scans (downloads to data_cache/)
 python scripts/45_image_guided_6dof.py       # 6-DOF: spatial UR5 + real-scan phantom
+python scripts/46_closing_structural_gap.py  # extend the model the loop said was missing
+python scripts/47_needle_impedance.py        # tissue contact: position vs impedance control
 pytest -q
 ```
 
@@ -1182,6 +1254,8 @@ scripts/
   43_sim_to_real_arm.py         sim-to-real loop: deploy→detect→identify→redeploy (UR5 published params)
   44_registration_real_scans.py registration on real Stanford Bunny scans (gate transfer test)
   45_image_guided_6dof.py       6-DOF targeting: spatial UR5 + real-scan phantom, tool-shaft safety
+  46_closing_structural_gap.py  extend friction structure + low-speed excitation (separable LS)
+  47_needle_impedance.py        needle–tissue contact: position vs operational-space impedance
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
@@ -1282,6 +1356,8 @@ well-formedness.
 - [x] Sim-to-real loop on the arm: deploy → detect → identify (linear-in-parameters) → redeploy, on UR5 specs
 - [x] Registration validated on real laser scans (Stanford Bunny) — safety-gate transfer test
 - [x] 6-DOF upgrade: spatial UR5 (published DH/inertia, Lagrangian + RNEA) driving the image-guided chain
+- [x] Closing the structural gap: extended friction model + low-speed excitation (separable least squares)
+- [x] Contact: needle–tissue interaction model, position vs operational-space impedance control
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
