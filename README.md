@@ -32,7 +32,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-47 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+48 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -41,8 +41,8 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 → an error-state KF → model-based RL → manipulator kinematics & dynamics → surgical
 patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
-spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact and
-impedance control.**
+spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
+impedance control, and a flexible needle steered by its own spin.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -91,6 +91,7 @@ impedance control.**
 | 45 | **6-DOF image-guided targeting** (spatial UR5 + real scan) | TRE 0.08 mm / 0.13°; PD droops 50 mm & 12°; a point-tool check is blind to the shaft cutting at 9.7° |
 | 46 | closing the **structural gap** (#43's plateau) | extra structure alone barely helps (0.208 → 0.162 mm); **+ low-speed excitation → 0.002 mm** |
 | 47 | **needle–tissue contact**: position vs impedance control | stiff = accurate (1.35 mm) but lunges 0.67 mm through the puncture; soft = 0 lunge, 4.67 mm |
+| 48 | **flexible needle**: bending vs the spin DOF | bevel bending eats **43%** of the corridor; a 180° flip at 30% depth recovers it (**55×**) |
 
 ## Experiments
 
@@ -1140,6 +1141,42 @@ magnitudes; it is not a reproduction of any specific published dataset.
 
 ![needle impedance](assets/47_needle_impedance.png)
 
+### 48. Flexible needle: bending, and the spin DOF that cancels it (`scripts/48_flexible_needle.py`)
+Experiment 45 treated the tool as a **rigid segment** and concluded the shaft cuts the vessel at 9.7° of axis
+error. Experiment 47 added the *forces* but kept the needle straight. A real 21G needle is 0.8 mm across and
+bends under the lateral force its bevel tip generates — which is why needle steering exists as a field. This
+experiment closes that gap in two steps: mechanics (why it bends) and geometry (what that costs).
+
+The needle is solved as a cantilever with distributed tissue support. Under small angles the energy is
+quadratic in the segment kink angles, so equilibrium is **one linear solve** — no iteration. Integrating the
+resulting curvature gives the 3D centerline, which is then measured against the same vessel corridor as #45.
+
+| quantity | rigid assumption | flexible |
+|--|----------:|----------:|
+| tip deflection over 70 mm | 0 | **1.97 mm** (κ = 0.81 /m, R = 1230 mm) |
+| shaft clearance to the vessel | 2.20 mm | **1.25 mm** (−43%) |
+| axis-error threshold before cutting | 2.2° | **1.3°** (−43%) |
+
+- The free-air case (no tissue support) gives 6.95 mm of deflection, matching the analytic cantilever
+  `Fℓ³/(3EI)` = 6.8 mm — that agreement is how the discretization was validated, and it caught a real bug:
+  kink-angle → deflection is a **double** integration, and accumulating once makes deflection ~500× too small
+  (0.01 mm instead of 6.95 mm), which silently flips the entire conclusion.
+- **The compensation comes from an unexpected place.** In #45 the spin about the needle axis was "task
+  irrelevant" and was spent maximizing manipulability. Here it is the *control input*: flipping the bevel 180°
+  partway through cancels the arc. The sweep finds the optimum at 30% of the insertion depth and cuts tip
+  deviation 1.98 → **0.04 mm (55×)**, restoring clearance to 2.01 mm and the threshold to 2.0°. That optimum is
+  not 50% — solving `2x² − 4x + 1 = 0` gives `1 − 1/√2 = 29.3%`, which the numerical sweep reproduces. Flipping
+  at the midpoint cancels the slope but leaves an offset. Continuous duty-cycled spin gives 0.21 mm.
+- **One DOF, two jobs.** #45 spent the spin on manipulability (w 0.006 → 0.064); #48 needs it for bending
+  compensation. They cannot both be optimized — a real design would split them by phase (posture during
+  approach, spin during insertion). Stated, not solved.
+- Honest scope: tissue support is modelled as distributed springs pulling toward the *straight* axis, whereas a
+  real needle follows the channel it has already cut — so this underestimates deflection (its R = 1230 mm is
+  straighter than the 100–300 mm reported in the literature, which the free-air solution does reach). Curvature
+  is held constant over the insertion, small-angle beam theory is assumed, and the flip is open-loop.
+
+![flexible needle](assets/48_flexible_needle.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1198,6 +1235,7 @@ python scripts/44_registration_real_scans.py # real Stanford Bunny scans (downlo
 python scripts/45_image_guided_6dof.py       # 6-DOF: spatial UR5 + real-scan phantom
 python scripts/46_closing_structural_gap.py  # extend the model the loop said was missing
 python scripts/47_needle_impedance.py        # tissue contact: position vs impedance control
+python scripts/48_flexible_needle.py         # needle bending and spin compensation
 pytest -q
 ```
 
@@ -1256,6 +1294,7 @@ scripts/
   45_image_guided_6dof.py       6-DOF targeting: spatial UR5 + real-scan phantom, tool-shaft safety
   46_closing_structural_gap.py  extend friction structure + low-speed excitation (separable LS)
   47_needle_impedance.py        needle–tissue contact: position vs operational-space impedance
+  48_flexible_needle.py         bevel-induced bending (beam solve) + spin compensation
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
@@ -1358,6 +1397,7 @@ well-formedness.
 - [x] 6-DOF upgrade: spatial UR5 (published DH/inertia, Lagrangian + RNEA) driving the image-guided chain
 - [x] Closing the structural gap: extended friction model + low-speed excitation (separable least squares)
 - [x] Contact: needle–tissue interaction model, position vs operational-space impedance control
+- [x] Flexible needle: bevel-induced bending (beam solve) and spin-based compensation (flip / duty cycling)
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
