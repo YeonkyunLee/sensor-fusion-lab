@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-49 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+50 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -56,7 +56,8 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
 spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
-impedance control, a flexible needle steered by its own spin → and registration on a real human MR scan.**
+impedance control, a flexible needle steered by its own spin → registration on a real human
+MR scan → and teleoperation under delay.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -107,6 +108,7 @@ impedance control, a flexible needle steered by its own spin → and registratio
 | 47 | **needle–tissue contact**: position vs impedance control | stiff = accurate (1.35 mm) but lunges 0.67 mm through the puncture; soft = 0 lunge, 4.67 mm |
 | 48 | **flexible needle**: bending vs the spin DOF | bevel bending eats **43%** of the corridor; a 180° flip at 30% depth recovers it (**55×**) |
 | 49 | **registration on a real human MR scan** | where you probe matters (**2.6×**); the clinical verification point detects 100% of failures where the covariance gate gets 44% |
+| 50 | **teleoperation under delay** (bilateral, passivity, virtual fixtures) | P-P chatters from 50 ms; wave variables hold at 200 ms with 15× better force fidelity; a safety wall must be rendered **locally** |
 
 ## Experiments
 
@@ -1240,6 +1242,52 @@ that was **not** used in the registration and check it (residual ↔ TRE correla
 
 ![real anatomy registration](assets/49_registration_real_anatomy.png)
 
+### 50. Teleoperation under delay (`scripts/50_teleoperation_delay.py`)
+The chain so far has been autonomous: a plan goes in, the arm executes. Real surgical robots are
+**teleoperated** — a surgeon moves a master, the arm follows, and tissue forces come back to the hand. That
+force path is where delay becomes dangerous, because a delayed channel can *generate* energy. This is a 1-DOF
+study along the insertion axis (reusing the needle–tissue model from #47) comparing four architectures at
+one-way delays from 0 to 200 ms.
+
+| architecture | stability vs delay | force fidelity (felt vs actual) | position error |
+|--|--|----------:|----------:|
+| unilateral (no force feedback) | stable to 200 ms | **1.08 N** (feels nothing) | 1.45 mm |
+| P-P direct force reflection | chatters from **50 ms** | **4.01 N** — *worse than nothing* | 1.05 mm |
+| wave variables | stable to 200 ms | 0.26 N | 12.09 mm (drifts) |
+| **wave + position correction** | stable to 200 ms | **0.19 N** | 7.43 mm |
+
+- **Why wave variables work:** transmit `u = (b·v + F)/√(2b)` instead of raw velocity/force and the channel
+  becomes passive for any constant delay. The experiment doesn't take that on faith — it integrates the channel
+  energy (in − out) and checks it stays ≥ 0, which it does for both wave variants (0.028–0.032 J) while P-P
+  accumulates 0.185 J of channel-injected energy.
+- **P-P's failure is not only instability.** The hand feels the *coupling spring*, not the tissue: 4.01 N of
+  force error against a ~1.3 N tissue force. Force feedback done wrong is worse than none.
+- **The price of passivity** is transparency and correspondence: wave variables add apparent damping (the hand
+  feels heavier, the tool advances less) and, because they transmit velocity, **position drifts** — 12 mm of
+  master–slave mismatch. A small position-correction channel cuts that to 7.4 mm while staying passive. The
+  wave impedance `b` is the knob: b = 5 is light and reaches deeper but oscillates at some delays; b = 10 is the
+  smallest value stable across 20–200 ms.
+- **Virtual fixtures (active constraints)** — a forbidden-zone wall rendered to the hand, i.e. experiment 9's
+  "stop when unsure" moved into a human-in-the-loop system. Where it is computed decides everything:
+
+| K_vf [N/m] | penetration, rendered **locally** | penetration, rendered **through the delay** |
+|--|----------:|----------:|
+| 0 (no wall) | 17.08 mm | 17.08 mm |
+| 800 | 4.64 mm | 44.63 mm (297 µm chatter) |
+| 12 000 | 0.41 mm | diverges |
+| 50 000 | **0.10 mm** (168× less) | diverges |
+
+  A local wall can be made stiff enough to be a real constraint; the same wall rendered over a 50 ms path
+  destabilises above ~800 N/m — **the safety feature becomes the hazard.** This is why constraints are rendered
+  on the master side in practice.
+- Honest scope: 1-DOF, constant delay (real networks have jitter and loss, which is why time-domain passivity
+  control exists), and the operator is a fixed linear impedance — a real surgeon adapts, and closing the human's
+  visual loop through the same delay destabilises *the human loop* regardless of architecture (checked while
+  building this: with visual closure everything oscillated, which is why the comparison holds the hand's
+  reference fixed and scores transparency/stability instead of task completion).
+
+![teleoperation under delay](assets/50_teleoperation_delay.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1301,6 +1349,7 @@ python scripts/46_closing_structural_gap.py  # extend the model the loop said wa
 python scripts/47_needle_impedance.py        # tissue contact: position vs impedance control
 python scripts/48_flexible_needle.py         # needle bending and spin compensation
 python scripts/49_registration_real_anatomy.py  # real human MR scan (downloads to data_cache/)
+python scripts/50_teleoperation_delay.py     # teleoperation: delay, passivity, virtual fixtures
 pytest -q
 ```
 
@@ -1361,6 +1410,7 @@ scripts/
   47_needle_impedance.py        needle–tissue contact: position vs operational-space impedance
   48_flexible_needle.py         bevel-induced bending (beam solve) + spin compensation
   49_registration_real_anatomy.py  real human MR scan: landmark+surface registration, where to probe
+  50_teleoperation_delay.py     teleoperation under delay: bilateral control, passivity, virtual fixtures
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
@@ -1467,6 +1517,7 @@ well-formedness.
 - [x] Flexible needle: bevel-induced bending (beam solve) and spin-based compensation (flip / duty cycling)
 - [x] Registration on a real human MR scan: landmark→surface workflow, where-to-probe, verification-point gate
 - [x] Verification & risk analysis of the image-guided chain: requirements, hazards, traceability to tests
+- [x] Teleoperation under delay: bilateral architectures, wave-variable passivity, virtual-fixture stiffness limit
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
