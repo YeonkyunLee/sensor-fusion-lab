@@ -23,6 +23,11 @@ Two cart-poles balance under the same shifted "real" world — a nominal-only po
 one — so you can drag the dynamics away from nominal and watch the overfit controller fall while the robust
 one keeps balancing (`dr_demo.html`, no libraries).
 
+🩺 **[Try the interactive image-guided registration demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/guided_demo.html)**
+Drag to digitize the patient's surface and watch where you probe decide the deep-target error: probe only the
+smooth region and the fit slides along the surface; include the distinctive one and it locks. An independent
+verification point catches the failures the covariance misses (`guided_demo.html`, no libraries).
+
 🛰️ **[Try the interactive particle-filter (MCL) demo →](https://yeonkyunlee.github.io/sensor-fusion-lab/mcl_demo.html)**
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
@@ -1440,7 +1445,8 @@ well-formedness.
 - [x] 3D LiDAR SLAM: point-to-plane ICP front-end + SE(3) pose-graph back-end
 - [x] Learning-based control & sim-to-real: domain randomization, SimOpt loop, reward design
 - [x] Residual RL: classical base controller + learned correction (model-based + learning hybrid)
-- [x] Four interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real, particle-filter MCL)
+- [x] Five interactive in-browser demos (pose-graph SLAM, tremor cancellation, sim-to-real, particle-filter
+      MCL, image-guided registration) — the last one headless-verified by `tests/guided_demo_check.js`
 - [x] Error-state KF (ESKF) for attitude — the indirect formulation used in real VIO/INS
 - [x] Medical-robotics blog post tying safe autonomy + tremor + gait (blog/05)
 - [x] Synthetic data & auto-labeling for sim-to-real perception (domain randomization on labels)

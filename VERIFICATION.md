@@ -56,10 +56,12 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 
 ## 4. Traceability summary
 
-- **133 tests, all passing** (`pytest -q`, ~3.7 min). Every experiment has at least one test; the
+- **135 tests, all passing** (`pytest -q`, ~4 min). Every experiment has at least one test; the
   medical chain (39–49) carries **65** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
-  contact 6, flexible needle 7, real anatomy 8.
+  contact 6, flexible needle 7, real anatomy 8. The browser demo's core is separately verified headless
+  (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
+  ordering the maths does not support.
 - Requirements R1–R8 above each name the tests that verify them; hazards H1–H10 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and

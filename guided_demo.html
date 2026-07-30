@@ -1,0 +1,479 @@
+---
+layout: none
+---
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive image-guided registration — sensor-fusion-lab</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --probe:#58a6ff; --plan:#3fb950; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 22px; border-bottom:1px solid #30363d; }
+  header h1 { margin:0; font-size:19px; }
+  header p { margin:6px 0 0; color:var(--muted); font-size:13px; line-height:1.55; max-width:940px; }
+  header a { color:var(--accent); text-decoration:none; }
+  .wrap { display:flex; flex-wrap:wrap; gap:18px; padding:18px 22px; }
+  .stage { flex:1 1 560px; min-width:320px; }
+  canvas { width:100%; background:#0a0e14; border:1px solid #30363d; border-radius:10px; display:block;
+           cursor:crosshair; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; line-height:1.6; }
+  .panel { flex:0 0 300px; background:var(--panel); border:1px solid #30363d; border-radius:10px;
+           padding:16px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted);
+              margin:0 0 10px; }
+  button { width:100%; padding:9px; margin:5px 0; border:1px solid #30363d; border-radius:8px;
+           background:#21262d; color:var(--fg); font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0d1117; font-weight:600; border-color:var(--accent); }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
+  td { padding:3px 0; }
+  td.k { color:var(--muted); }
+  td.v { text-align:right; font-variant-numeric:tabular-nums; }
+  .verdict { margin-top:12px; padding:10px; border-radius:8px; font-size:13px; font-weight:600;
+             text-align:center; }
+  .verdict.go { background:rgba(63,185,80,.15); color:var(--ok); border:1px solid var(--ok); }
+  .verdict.stop { background:rgba(248,81,73,.15); color:var(--bad); border:1px solid var(--bad); }
+  .verdict.idle { background:#21262d; color:var(--muted); border:1px solid #30363d; }
+  .bar { height:9px; background:#21262d; border-radius:5px; overflow:hidden; margin:4px 0 10px; }
+  .bar > i { display:block; height:100%; }
+  hr { border:0; border-top:1px solid #30363d; margin:14px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>영상유도 정합 — 어디를 찍느냐가 정확도를 정한다</h1>
+  <p>
+    수술 전 영상의 계획(표적 ★, 피해야 할 혈관 ●)을 수술대의 환자에게 옮기려면 <b>정합</b>이 필요하다.
+    환자 표면을 <b>드래그해서 찍어 보라</b>. 매끄러운 곳만 찍으면 표면을 따라 <b>미끄러져</b> 심부 표적이
+    빗나가고, 코·굴곡처럼 특징적인 곳을 포함하면 잡힌다. 정합에 쓰지 않은 <b>검증점</b>이 그 실패를 잡아낸다.
+    (실험 41·42·44·49의 브라우저 축소판 —
+    <a href="https://github.com/YeonkyunLee/sensor-fusion-lab">sensor-fusion-lab</a>)
+  </p>
+</header>
+
+<div class="wrap">
+  <div class="stage">
+    <canvas id="cv" width="720" height="560"></canvas>
+    <div class="hint">
+      회색 = 수술 전 영상의 표면(계획 좌표계) · 흰색 = 수술대의 환자(미지의 자세) ·
+      파란 점 = 내가 찍은 프로브 점 · 초록 = 정합으로 옮긴 계획 경로(도구 몸통 포함) ·
+      노란 ◇ = 랜드마크(조대정렬용) · 보라 ◆ = 검증점(정합에 쓰지 않음)
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>절차</h2>
+    <button id="btnLand">① 랜드마크 3점 찍기 (조대정렬)</button>
+    <button id="btnReg" class="primary">② 정합 실행 (ICP)</button>
+    <button id="btnReset">리셋</button>
+    <hr>
+    <h2>프로브 프리셋</h2>
+    <button id="btnSmooth">매끄러운 곳만 (두피)</button>
+    <button id="btnFeature">특징적인 곳 (코·굴곡)</button>
+    <button id="btnSpread">여러 곳 흩어서</button>
+    <hr>
+    <h2>결과</h2>
+    <table>
+      <tr><td class="k">프로브 점</td><td class="v" id="oN">0</td></tr>
+      <tr><td class="k">FRE (측정 가능)</td><td class="v" id="oFre">—</td></tr>
+      <tr><td class="k">σ_target (예측)</td><td class="v" id="oSig">—</td></tr>
+      <tr><td class="k">검증점 잔차</td><td class="v" id="oVer">—</td></tr>
+      <tr><td class="k"><b>TRE (실제·정답)</b></td><td class="v" id="oTre">—</td></tr>
+      <tr><td class="k">혈관까지 여유</td><td class="v" id="oClr">—</td></tr>
+    </table>
+    <div class="bar"><i id="barTre" style="width:0%;background:var(--ok)"></i></div>
+    <div class="verdict idle" id="verdict">정합 전</div>
+    <div class="hint" id="lesson" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<script id="core">
+// ---------------------------------------------------------------------------
+// 코어 (브라우저·node 공용). 좌표는 px, 표시는 mm (PX_MM 배율).
+// ---------------------------------------------------------------------------
+var PX_MM = 0.5;                 // 1 px = 0.5 mm
+var TOL_MM = 2.0;                // 임상 허용 표적오차
+var VESSEL_R = 16;               // px
+var SERVO_MM = 0.09;             // 서보 몫(실험 45 측정값) — 예산 비교용 상수
+
+function anatomy(theta) {         // 계획(영상) 좌표계의 표면. 코 융기가 특징 영역.
+  var r = 120 * (1 + 0.06 * Math.sin(3 * theta) + 0.03 * Math.cos(2 * theta));
+  var d = Math.atan2(Math.sin(theta - 0.6), Math.cos(theta - 0.6));
+  r += 42 * Math.exp(-(d * d) / (2 * 0.055));            // 코
+  r += 14 * Math.exp(-Math.pow(theta - 2.4, 2) / (2 * 0.05));  // 귀 근처 굴곡
+  return { x: r * Math.cos(theta), y: r * Math.sin(theta) };
+}
+
+function buildModel(n) {
+  var pts = [], nrm = [], i;
+  for (i = 0; i < n; i++) pts.push(anatomy(2 * Math.PI * i / n));
+  for (i = 0; i < n; i++) {                               // 접선 → 외향 법선
+    var a = pts[(i - 1 + n) % n], b = pts[(i + 1) % n];
+    var tx = b.x - a.x, ty = b.y - a.y, L = Math.hypot(tx, ty) || 1;
+    var nx = ty / L, ny = -tx / L;
+    if (nx * pts[i].x + ny * pts[i].y < 0) { nx = -nx; ny = -ny; }
+    nrm.push({ x: nx, y: ny });
+  }
+  return { pts: pts, nrm: nrm };
+}
+
+function se2(a, tx, ty) { return { c: Math.cos(a), s: Math.sin(a), tx: tx, ty: ty }; }
+function apply(T, p) {
+  return { x: T.c * p.x - T.s * p.y + T.tx, y: T.s * p.x + T.c * p.y + T.ty };
+}
+function compose(A, B) {                                  // A∘B
+  return { c: A.c * B.c - A.s * B.s, s: A.s * B.c + A.c * B.s,
+           tx: A.c * B.tx - A.s * B.ty + A.tx, ty: A.s * B.tx + A.c * B.ty + A.ty };
+}
+function invert(T) {
+  return { c: T.c, s: -T.s, tx: -(T.c * T.tx + T.s * T.ty), ty: -(-T.s * T.tx + T.c * T.ty) };
+}
+
+function nearest(model, p, maxd) {                        // 브루트포스(모델 360점이면 충분)
+  var best = -1, bd = maxd * maxd, i, dx, dy, d;
+  for (i = 0; i < model.pts.length; i++) {
+    dx = model.pts[i].x - p.x; dy = model.pts[i].y - p.y; d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
+// 랜드마크 조대정렬: 대응 3점 이상에서 강체변환(2D Procrustes)
+function procrustes(src, dst) {
+  var n = src.length, i, cs = { x: 0, y: 0 }, cd = { x: 0, y: 0 };
+  for (i = 0; i < n; i++) { cs.x += src[i].x / n; cs.y += src[i].y / n;
+                            cd.x += dst[i].x / n; cd.y += dst[i].y / n; }
+  var sxx = 0, sxy = 0;
+  for (i = 0; i < n; i++) {
+    var a = { x: src[i].x - cs.x, y: src[i].y - cs.y },
+        b = { x: dst[i].x - cd.x, y: dst[i].y - cd.y };
+    sxx += a.x * b.x + a.y * b.y;
+    sxy += a.x * b.y - a.y * b.x;
+  }
+  var ang = Math.atan2(sxy, sxx), c = Math.cos(ang), s = Math.sin(ang);
+  return { c: c, s: s, tx: cd.x - (c * cs.x - s * cs.y), ty: cd.y - (s * cs.x + c * cs.y) };
+}
+
+// 점-대-법선 2D ICP + 신뢰도 지표(σ). 반환: {T, fre, sigma, inlier}
+function icp(probe, model, init, opts) {
+  opts = opts || {};
+  var T = init, iters = opts.iters || 40, gate = opts.gate || 26, k, i;
+  var rms = Infinity, A = null, inl = 0;
+  for (k = 0; k < iters; k++) {
+    var H = [0, 0, 0, 0, 0, 0], g = [0, 0, 0], used = 0, ss = 0;   // H: 상삼각 3x3
+    for (i = 0; i < probe.length; i++) {
+      var q = apply(T, probe[i]);
+      var j = nearest(model, q, gate);
+      if (j < 0) continue;
+      var m = model.pts[j], nv = model.nrm[j];
+      var r = nv.x * (m.x - q.x) + nv.y * (m.y - q.y);
+      var J0 = nv.x * (-q.y) + nv.y * (q.x), J1 = nv.x, J2 = nv.y;  // [ω, tx, ty]
+      H[0] += J0 * J0; H[1] += J0 * J1; H[2] += J0 * J2;
+      H[3] += J1 * J1; H[4] += J1 * J2; H[5] += J2 * J2;
+      g[0] += J0 * r; g[1] += J1 * r; g[2] += J2 * r;
+      ss += r * r; used++;
+    }
+    if (used < 6) break;
+    var d = solve3(H, g);
+    if (!d) break;
+    T = compose(se2(d[0], d[1], d[2]), T);
+    var newRms = Math.sqrt(ss / used);
+    A = H; inl = used / probe.length;
+    if (Math.abs(rms - newRms) < 1e-6) { rms = newRms; break; }
+    rms = newRms;
+    if (k > iters * 0.4) gate = Math.max(8, gate * 0.9);   // 조대→정밀
+  }
+  return { T: T, fre: rms, A: A, inlier: inl };
+}
+
+function solve3(H, g) {                                   // 대칭 3x3 (상삜각 저장) 해
+  var a = H[0] + 1e-9, b = H[1], c = H[2], d = H[3] + 1e-9, e = H[4], f = H[5] + 1e-9;
+  var det = a * (d * f - e * e) - b * (b * f - e * c) + c * (b * e - d * c);
+  if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+  var i00 = (d * f - e * e) / det, i01 = (c * e - b * f) / det, i02 = (b * e - c * d) / det;
+  var i11 = (a * f - c * c) / det, i12 = (b * c - a * e) / det, i22 = (a * d - b * b) / det;
+  return [i00 * g[0] + i01 * g[1] + i02 * g[2],
+          i01 * g[0] + i11 * g[1] + i12 * g[2],
+          i02 * g[0] + i12 * g[1] + i22 * g[2]];
+}
+
+// 표적점 불확실도: Cov(ξ) ≈ σ² A⁻¹ 를 [−p_y, 1, 0; p_x, 0, 1] 로 전파
+function targetSigma(A, fre, p) {
+  if (!A) return Infinity;
+  var s2 = Math.max(fre, 1.0); s2 = s2 * s2;
+  var e = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(function (col) { return solve3(A, col); });
+  if (e.some(function (v) { return !v; })) return Infinity;
+  var C = [[e[0][0], e[1][0], e[2][0]], [e[0][1], e[1][1], e[2][1]], [e[0][2], e[1][2], e[2][2]]];
+  var J = [[-p.y, 1, 0], [p.x, 0, 1]], out = [[0, 0], [0, 0]], i, j, k, l;
+  for (i = 0; i < 2; i++) for (j = 0; j < 2; j++) {
+    var acc = 0;
+    for (k = 0; k < 3; k++) for (l = 0; l < 3; l++) acc += J[i][k] * s2 * C[k][l] * J[j][l];
+    out[i][j] = acc;
+  }
+  var tr = out[0][0] + out[1][1], dt = out[0][0] * out[1][1] - out[0][1] * out[1][0];
+  var lam = tr / 2 + Math.sqrt(Math.max(tr * tr / 4 - dt, 0));
+  return Math.sqrt(Math.max(lam, 0));
+}
+
+function segClearance(a, b, c) {                          // 선분 a→b 와 점 c 최소거리
+  var vx = b.x - a.x, vy = b.y - a.y, L2 = vx * vx + vy * vy || 1;
+  var t = Math.max(0, Math.min(1, ((c.x - a.x) * vx + (c.y - a.y) * vy) / L2));
+  return Math.hypot(a.x + t * vx - c.x, a.y + t * vy - c.y);
+}
+
+var CORE = { anatomy: anatomy, buildModel: buildModel, se2: se2, apply: apply,
+             compose: compose, invert: invert, procrustes: procrustes, icp: icp,
+             targetSigma: targetSigma, segClearance: segClearance, nearest: nearest,
+             PX_MM: PX_MM, TOL_MM: TOL_MM, VESSEL_R: VESSEL_R };
+if (typeof module !== "undefined" && module.exports) module.exports = CORE;
+</script>
+
+<script>
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+(function () {
+  var cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+  var MODEL = buildModel(360);
+  var CENTER = { x: 250, y: 300 };                     // 영상(계획) 좌표계 원점 화면 위치
+  var TARGET = { x: 20, y: -18 };                      // 심부 표적(계획 좌표)
+  var VESSEL = { x: 52, y: 6 };                        // 혈관 중심(계획 좌표)
+  var ENTRY_T = 1.9;                                   // 진입점 파라미터(θ)
+  var LAND_T = [0.6, 2.4, 4.3];                        // 랜드마크 θ (코·굴곡·후두)
+  var VERIFY_T = 5.4;                                  // 검증점 θ (정합에 쓰지 않음)
+  var T_TRUE = se2(0.38, 470, 300 - 0);                // 환자의 진짜 자세(미지)
+  var st = { probe: [], land: [], reg: null, res: null };
+
+  function toScreenPlan(p) { return { x: CENTER.x + p.x, y: CENTER.y + p.y }; }
+  function patient(p) { return apply(T_TRUE, p); }      // 계획 → 환자(화면 좌표)
+
+  // ---- 그리기 ----
+  function outline(f, style, w) {
+    ctx.beginPath();
+    for (var i = 0; i <= 360; i++) {
+      var q = f(anatomy(2 * Math.PI * i / 360));
+      if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+    }
+    ctx.strokeStyle = style; ctx.lineWidth = w; ctx.stroke();
+  }
+  function dot(p, c, r) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, r || 3, 0, 6.2832); ctx.fillStyle = c; ctx.fill();
+  }
+  function diamond(p, c, r) {
+    ctx.beginPath(); ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y);
+    ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y); ctx.closePath();
+    ctx.fillStyle = c; ctx.fill();
+  }
+  function star(p, c) {
+    ctx.save(); ctx.translate(p.x, p.y); ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var r = i % 2 ? 4 : 9, a = Math.PI * i / 5 - Math.PI / 2;
+      ctx[i ? "lineTo" : "moveTo"](r * Math.cos(a), r * Math.sin(a));
+    }
+    ctx.closePath(); ctx.fillStyle = c; ctx.fill(); ctx.restore();
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    // 계획 좌표계(수술 전 영상)
+    outline(toScreenPlan, "#30363d", 1.5);
+    ctx.fillStyle = "#8b949e"; ctx.font = "12px sans-serif";
+    ctx.fillText("수술 전 영상 (계획 좌표계)", CENTER.x - 90, CENTER.y - 175);
+    star(toScreenPlan(TARGET), "#8b949e");
+    ctx.beginPath();
+    ctx.arc(toScreenPlan(VESSEL).x, toScreenPlan(VESSEL).y, VESSEL_R, 0, 6.2832);
+    ctx.fillStyle = "rgba(248,81,73,.25)"; ctx.fill();
+
+    // 환자(미지의 자세)
+    outline(function (p) { return patient(p); }, "#e6edf3", 2);
+    ctx.fillStyle = "#e6edf3";
+    ctx.fillText("수술대의 환자 (자세 미지)", patient({ x: -60, y: -190 }).x,
+                 patient({ x: -60, y: -190 }).y);
+    star(patient(TARGET), "rgba(230,237,243,.35)");
+    ctx.beginPath();
+    var vp = patient(VESSEL);
+    ctx.arc(vp.x, vp.y, VESSEL_R, 0, 6.2832);
+    ctx.fillStyle = "rgba(248,81,73,.18)"; ctx.fill();
+
+    // 랜드마크·검증점(환자 위 표시)
+    LAND_T.forEach(function (t) { diamond(patient(anatomy(t)), "#d29922", 6); });
+    diamond(patient(anatomy(VERIFY_T)), "#a371f7", 6);
+    st.land.forEach(function (l) { dot(l.digit, "#d29922", 4); });
+
+    // 프로브 점
+    st.probe.forEach(function (p) { dot(p, "#58a6ff", 2.5); });
+
+    // 정합 결과: 계획을 환자 좌표로 옮겨 그린다
+    if (st.reg) {
+      var Tp = invert(st.reg.T);                        // 계획 → 환자(추정)
+      var e = apply(Tp, anatomy(ENTRY_T)), tg = apply(Tp, TARGET);
+      var ux = tg.x - e.x, uy = tg.y - e.y, L = Math.hypot(ux, uy) || 1;
+      ctx.beginPath(); ctx.moveTo(e.x, e.y);
+      ctx.lineTo(e.x + ux * 1.0, e.y + uy * 1.0);
+      ctx.strokeStyle = st.res.clearMm < 0 ? "#f85149" : "#3fb950";
+      ctx.lineWidth = 3; ctx.stroke();
+      // 도구 몸통(팁에서 뒤로)
+      ctx.beginPath(); ctx.moveTo(tg.x, tg.y);
+      ctx.lineTo(tg.x - ux / L * 150, tg.y - uy / L * 150);
+      ctx.strokeStyle = "rgba(63,185,80,.35)"; ctx.lineWidth = 6; ctx.stroke();
+      star(tg, "#3fb950");
+      // 추정 표면
+      outline(function (p) { return apply(Tp, p); }, "rgba(63,185,80,.45)", 1);
+    }
+  }
+
+  // ---- 계산 ----
+  function digitize(t, noise) {
+    var p = patient(anatomy(t));
+    return { x: p.x + (Math.random() - .5) * noise, y: p.y + (Math.random() - .5) * noise };
+  }
+
+  function runRegistration() {
+    if (st.probe.length < 8) { setVerdict("idle", "프로브 점이 너무 적다"); return; }
+    var init;
+    if (st.land.length >= 3) {
+      init = procrustes(st.land.map(function (l) { return l.digit; }),
+                        st.land.map(function (l) { return l.model; }));
+    } else {                                            // 조대정렬 없음 = 무게중심만
+      var cs = { x: 0, y: 0 }, cm = { x: 0, y: 0 }, i;
+      for (i = 0; i < st.probe.length; i++) { cs.x += st.probe[i].x / st.probe.length;
+                                              cs.y += st.probe[i].y / st.probe.length; }
+      init = se2(0, cm.x - cs.x, cm.y - cs.y);
+    }
+    var out = icp(st.probe, MODEL, init);
+    var comp = compose(out.T, T_TRUE);                  // 이상적으로 항등
+    var tt = apply(comp, TARGET);
+    var treMm = Math.hypot(tt.x - TARGET.x, tt.y - TARGET.y) * PX_MM;
+    var sig = targetSigma(out.A, out.fre, TARGET) * PX_MM;
+    // 검증점: 정합에 쓰지 않은 점을 찍어 검산
+    var vd = digitize(VERIFY_T, 3), vm = anatomy(VERIFY_T);
+    var vp = apply(out.T, vd);
+    var verMm = Math.hypot(vp.x - vm.x, vp.y - vm.y) * PX_MM;
+    // 통로 여유: 추정 경로(계획→환자)를 진짜 혈관에 대고 잰다
+    var Tp = invert(out.T);
+    var e = apply(Tp, anatomy(ENTRY_T)), tg = apply(Tp, TARGET);
+    var clearMm = (segClearance(e, tg, patient(VESSEL)) - VESSEL_R) * PX_MM;
+
+    st.reg = out;
+    st.res = { treMm: treMm, freMm: out.fre * PX_MM, sigMm: sig, verMm: verMm,
+               clearMm: clearMm, inlier: out.inlier };
+    report();
+    draw();
+  }
+
+  function setVerdict(cls, text) {
+    var v = document.getElementById("verdict");
+    v.className = "verdict " + cls; v.textContent = text;
+  }
+
+  function report() {
+    var r = st.res;
+    document.getElementById("oN").textContent = st.probe.length;
+    if (!r) return;
+    document.getElementById("oFre").textContent = r.freMm.toFixed(2) + " mm";
+    document.getElementById("oSig").textContent = isFinite(r.sigMm)
+      ? r.sigMm.toFixed(2) + " mm" : "∞";
+    document.getElementById("oVer").textContent = r.verMm.toFixed(2) + " mm";
+    document.getElementById("oTre").textContent = r.treMm.toFixed(2) + " mm";
+    document.getElementById("oClr").textContent = r.clearMm.toFixed(2) + " mm";
+    var frac = Math.min(1, r.treMm / (TOL_MM * 3));
+    var bar = document.getElementById("barTre");
+    bar.style.width = (frac * 100).toFixed(0) + "%";
+    bar.style.background = r.treMm > TOL_MM ? "var(--bad)" : "var(--ok)";
+
+    // 게이트: 검증점 잔차 기준(임상 절차). σ 는 참고로만 보여준다.
+    var gateStop = r.verMm > TOL_MM || r.clearMm < 0;
+    var truth = r.treMm > TOL_MM ? "실제로 허용 초과" : "실제로 허용 이내";
+    if (gateStop) setVerdict("stop", "중단 — 검증점이 " + r.verMm.toFixed(2) + " mm (" + truth + ")");
+    else setVerdict("go", "집행 — 검증점 " + r.verMm.toFixed(2) + " mm (" + truth + ")");
+
+    var msg;
+    if (r.treMm > TOL_MM && r.sigMm < TOL_MM / 3)
+      msg = "σ 는 작은데 TRE 는 크다 — <b>확신에 차서 틀린 정합</b>. 공분산만 믿으면 이걸 놓친다. " +
+            "검증점이 잡아낸다.";
+    else if (r.treMm > TOL_MM)
+      msg = "빗나갔다. 매끄러운 곳만 찍으면 해가 표면을 따라 미끄러진다 — 특징적인 영역을 포함해 보라.";
+    else if (r.freMm > r.treMm * 3)
+      msg = "FRE 는 큰데 TRE 는 작다 — 표면 잔차는 표적 정확도를 그대로 대변하지 않는다.";
+    else
+      msg = "잘 잡혔다. 특징적인 영역과 흩어진 커버리지가 회전을 구속한 결과다.";
+    document.getElementById("lesson").innerHTML = msg;
+  }
+
+  // ---- 상호작용 ----
+  var dragging = false;
+  function nearestPatientTheta(mx, my) {
+    var bt = 0, bd = 1e9;
+    for (var i = 0; i < 360; i++) {
+      var t = 2 * Math.PI * i / 360, p = patient(anatomy(t));
+      var d = (p.x - mx) * (p.x - mx) + (p.y - my) * (p.y - my);
+      if (d < bd) { bd = d; bt = t; }
+    }
+    return { t: bt, d: Math.sqrt(bd) };
+  }
+  function addProbeAt(mx, my) {
+    var n = nearestPatientTheta(mx, my);
+    if (n.d > 26) return;                               // 표면에서 너무 멀면 무시
+    st.probe.push(digitize(n.t, 3));
+    document.getElementById("oN").textContent = st.probe.length;
+    draw();
+  }
+  function pos(ev) {
+    var r = cv.getBoundingClientRect();
+    return { x: (ev.clientX - r.left) * cv.width / r.width,
+             y: (ev.clientY - r.top) * cv.height / r.height };
+  }
+  cv.addEventListener("mousedown", function (ev) { dragging = true; var p = pos(ev);
+                                                   addProbeAt(p.x, p.y); });
+  cv.addEventListener("mousemove", function (ev) { if (!dragging) return; var p = pos(ev);
+                                                   addProbeAt(p.x, p.y); });
+  window.addEventListener("mouseup", function () { dragging = false; });
+  cv.addEventListener("touchmove", function (ev) {
+    ev.preventDefault();
+    var t = ev.touches[0], r = cv.getBoundingClientRect();
+    addProbeAt((t.clientX - r.left) * cv.width / r.width,
+               (t.clientY - r.top) * cv.height / r.height);
+  }, { passive: false });
+
+  function sweep(tc, span, n, noise) {
+    for (var i = 0; i < n; i++) st.probe.push(digitize(tc + (i / (n - 1) - .5) * span, noise || 3));
+  }
+
+  document.getElementById("btnLand").onclick = function () {
+    st.land = LAND_T.map(function (t) { return { model: anatomy(t), digit: digitize(t, 8) }; });
+    draw();
+    setVerdict("idle", "조대정렬 준비됨 — ② 정합 실행");
+  };
+  document.getElementById("btnReg").onclick = runRegistration;
+  document.getElementById("btnReset").onclick = function () {
+    st = { probe: [], land: [], reg: null, res: null };
+    ["oFre", "oSig", "oVer", "oTre", "oClr"].forEach(function (id) {
+      document.getElementById(id).textContent = "—";
+    });
+    document.getElementById("oN").textContent = "0";
+    document.getElementById("barTre").style.width = "0%";
+    document.getElementById("lesson").innerHTML = "";
+    setVerdict("idle", "정합 전"); draw();
+  };
+  document.getElementById("btnSmooth").onclick = function () {
+    st.probe = []; sweep(4.9, 0.9, 60); runRegistration();
+  };
+  document.getElementById("btnFeature").onclick = function () {
+    st.probe = []; sweep(0.6, 0.9, 60); runRegistration();
+  };
+  document.getElementById("btnSpread").onclick = function () {
+    st.probe = []; sweep(0.6, 0.5, 20); sweep(2.4, 0.5, 20); sweep(4.9, 0.5, 20);
+    runRegistration();
+  };
+
+  document.getElementById("btnLand").click();
+  draw();
+})();
+</script>
+</body>
+</html>
