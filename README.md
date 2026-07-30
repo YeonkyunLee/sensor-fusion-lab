@@ -36,7 +36,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-48 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+49 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -46,7 +46,7 @@ medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance �
 patient-to-image registration → an image-guided targeting capstone with a full error budget → a sim-to-real
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
 spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
-impedance control, and a flexible needle steered by its own spin.**
+impedance control, a flexible needle steered by its own spin → and registration on a real human MR scan.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -96,6 +96,7 @@ impedance control, and a flexible needle steered by its own spin.**
 | 46 | closing the **structural gap** (#43's plateau) | extra structure alone barely helps (0.208 → 0.162 mm); **+ low-speed excitation → 0.002 mm** |
 | 47 | **needle–tissue contact**: position vs impedance control | stiff = accurate (1.35 mm) but lunges 0.67 mm through the puncture; soft = 0 lunge, 4.67 mm |
 | 48 | **flexible needle**: bending vs the spin DOF | bevel bending eats **43%** of the corridor; a 180° flip at 30% depth recovers it (**55×**) |
+| 49 | **registration on a real human MR scan** | where you probe matters (**2.6×**); the clinical verification point detects 100% of failures where the covariance gate gets 44% |
 
 ## Experiments
 
@@ -1181,6 +1182,54 @@ resulting curvature gives the 3D centerline, which is then measured against the 
 
 ![flexible needle](assets/48_flexible_needle.png)
 
+### 49. Surface registration on a real human MR scan (`scripts/49_registration_real_anatomy.py`)
+Experiment 44 moved the registration pipeline onto real measured points (Stanford Bunny) — real geometry, but
+not anatomy. This is the last data anchor: a **real human head MR** (3D Slicer's public `MRHead` sample,
+256×256×130), read with numpy alone (NRRD is a text header + gzipped raw), surface extracted by thresholding +
+largest connected component. The scenario is neuronavigation's surface registration: digitize part of the
+scalp/face, then reach a deep target planned in the image.
+
+**Coarse alignment is not optional.** Centroid alignment — which sufficed in #44, where the probe covered the
+whole object — fails outright here, because the centroid of a 6% surface patch has nothing to do with the
+centroid of a head:
+
+| coarse alignment (same probe patch) | TRE |
+|--|----------:|
+| centroid (the #44 approach) | 92.94 mm |
+| **4 anatomical landmarks → surface ICP** (the clinical workflow) | **0.68 mm** — 136× |
+
+**Where you probe decides the accuracy.** Holding the condition fixed and only moving the probed region across
+12 sites: regions in the smooth-scalp half give a median TRE of **1.26 mm**, feature-rich regions **0.49 mm**
+(2.6×), with correlation −0.60 between the region's local surface variation and log TRE. A near-spherical patch
+can slide along the surface — rotation is simply not constrained by the data. That is the geometric reason
+behind the clinical instruction to include the nose, brow and ears. Same story from the other side: with the
+**same total point count**, spreading the probe over 4 regions instead of 1 improves TRE 0.68 → **0.31 mm**.
+
+**And the reliability gate gets demoted again.** Over 20 trials (half under a rushed condition: 250 points, a
+2.4% patch, 4 mm landmark noise), scored against a clinical tolerance of 2 mm:
+
+| reliability signal | detection | false alarm | unsafe among executed |
+|--|----------:|----------:|----------:|
+| naive (always execute) | — | — | **45%** |
+| ① k·σ from the information matrix | 44% | 46% | 45% |
+| ② multi-start consistency | 67% | 27% | 27% |
+| ③ overlap (inlier fraction) | 0% | 0% | 45% |
+| ④ **independent verification point** (what clinicians actually do) | **100%** | 46% | **0%** |
+
+The covariance gate that scored 85% on synthetic anatomy and 5% on the Bunny lands at 44% here — and at this
+tolerance the dominant error is no longer conditioning but landmark bias and where the surface was sampled,
+which the covariance does not model. What does work is the boring clinical procedure: digitize one extra point
+that was **not** used in the registration and check it (residual ↔ TRE correlation +0.90). Across #42 → #44 →
+#49, every step toward reality demoted the elegant signal and promoted the independent check.
+
+- Honest scope: the image is a real human MR, but the *probing* is still simulated (no probe-tip calibration
+  error, no line-of-sight anisotropy, no operator habit). Registration is rigid, while scalp is deformable —
+  which is exactly why clinical practice leans on bony landmarks or deformable registration. The surface comes
+  from thresholding, not a segmentation algorithm. A surface verification point also **underestimates** deep
+  TRE through leverage, so it is a check, not a guarantee.
+
+![real anatomy registration](assets/49_registration_real_anatomy.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1241,6 +1290,7 @@ python scripts/45_image_guided_6dof.py       # 6-DOF: spatial UR5 + real-scan ph
 python scripts/46_closing_structural_gap.py  # extend the model the loop said was missing
 python scripts/47_needle_impedance.py        # tissue contact: position vs impedance control
 python scripts/48_flexible_needle.py         # needle bending and spin compensation
+python scripts/49_registration_real_anatomy.py  # real human MR scan (downloads to data_cache/)
 pytest -q
 ```
 
@@ -1300,6 +1350,7 @@ scripts/
   46_closing_structural_gap.py  extend friction structure + low-speed excitation (separable LS)
   47_needle_impedance.py        needle–tissue contact: position vs operational-space impedance
   48_flexible_needle.py         bevel-induced bending (beam solve) + spin compensation
+  49_registration_real_anatomy.py  real human MR scan: landmark+surface registration, where to probe
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
@@ -1403,6 +1454,7 @@ well-formedness.
 - [x] Closing the structural gap: extended friction model + low-speed excitation (separable least squares)
 - [x] Contact: needle–tissue interaction model, position vs operational-space impedance control
 - [x] Flexible needle: bevel-induced bending (beam solve) and spin-based compensation (flip / duty cycling)
+- [x] Registration on a real human MR scan: landmark→surface workflow, where-to-probe, verification-point gate
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
