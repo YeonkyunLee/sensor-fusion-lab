@@ -27,9 +27,14 @@ one keeps balancing (`dr_demo.html`, no libraries).
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 48 experiments as an
+🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 49 experiments as an
 8-stage study guide (Korean): what question each stage answers, what to run, what to look for, and the
 mistakes beginners hit — no derivations required.
+
+🛡️ **Safety engineering view:** [VERIFICATION.md](VERIFICATION.md) applies medical-device practice to
+the image-guided chain — 8 verifiable requirements, 10 hazards with mitigations traced to the tests that
+evidence them, and an explicit residual-risk statement. (An engineering exercise, not a regulatory
+submission.)
 
 📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
@@ -1455,6 +1460,7 @@ well-formedness.
 - [x] Contact: needle–tissue interaction model, position vs operational-space impedance control
 - [x] Flexible needle: bevel-induced bending (beam solve) and spin-based compensation (flip / duty cycling)
 - [x] Registration on a real human MR scan: landmark→surface workflow, where-to-probe, verification-point gate
+- [x] Verification & risk analysis of the image-guided chain: requirements, hazards, traceability to tests
 
 ## License
 MIT — see [LICENSE](LICENSE). Personal learning project; synthetic data only.
