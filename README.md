@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-50 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+51 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -57,7 +57,8 @@ patient-to-image registration → an image-guided targeting capstone with a full
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
 spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
 impedance control, a flexible needle steered by its own spin → registration on a real human
-MR scan → and teleoperation under delay.**
+MR scan → teleoperation under delay → and deformable registration, where the rigid assumption
+finally breaks.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -109,6 +110,7 @@ MR scan → and teleoperation under delay.**
 | 48 | **flexible needle**: bending vs the spin DOF | bevel bending eats **43%** of the corridor; a 180° flip at 30% depth recovers it (**55×**) |
 | 49 | **registration on a real human MR scan** | where you probe matters (**2.6×**); the clinical verification point detects 100% of failures where the covariance gate gets 44% |
 | 50 | **teleoperation under delay** (bilateral, passivity, virtual fixtures) | P-P chatters from 50 ms; wave variables hold at 200 ms with 15× better force fidelity; a safety wall must be rendered **locally** |
+| 51 | **deformable registration** (brain shift on the real MR head) | rigid leaves the full 5.7 mm shift; through a 4% window the **prior**, not the interpolator, wins (3.3 → 0.6 mm); refining the physics grid makes it **worse** |
 
 ## Experiments
 
@@ -1288,6 +1290,51 @@ one-way delays from 0 to 200 ms.
 
 ![teleoperation under delay](assets/50_teleoperation_delay.png)
 
+### 51. Deformable registration (`scripts/51_deformable_registration.py`)
+Every registration so far (#41, #44, #45, #49) assumed the patient is **rigid**. Tissue is not. After a
+craniotomy the brain sags under gravity and CSF loss and a retractor pushes locally — *brain shift*, reported
+in the literature at millimetres to ~2 cm. Whatever shift exists at the target is error that a rigid transform
+**cannot** remove, no matter how well it fits.
+
+The setup follows the clinical workflow: register rigidly on the **intact scalp before opening** (0.23 mm
+target error, #49 territory), then open, digitize only the exposed surface, and try to recover the deformation
+from it. A synthetic-but-plausible field is applied to the real MR head so ground truth at depth is known
+(12 mm sag decaying over 45 mm + a 5 mm retraction bulge). Targets sit 20/35/50/70 mm **below** the window.
+
+| method | what it assumes | narrow window (4% of surface) | wide (62%) |
+|--|--|----------:|----------:|
+| rigid ICP | patient does not deform | 5.69 mm | 5.69 mm |
+| free-form warp (TPS) | surface data only | 3.31 mm | 1.43 mm |
+| **TPS + skull prior** | + "scalp outside the window doesn't move" | **0.60 mm** | 1.44 mm |
+| harmonic extension | + ∇²u = 0 through the volume | 1.54 mm | 2.56 mm |
+
+- **What wins is the prior, not the interpolator.** Through a 4% window the same TPS goes 3.31 → 0.60 mm
+  (5.5×) when zero-displacement anchors encode one physical fact: the skull holds the scalp outside the
+  craniotomy. At 62% exposure that gain vanishes (1.43 vs 1.44 mm) — when the data constrains the field, the
+  prior has nothing left to do. Regularization is not a free improvement; it is **buying an assumption**, and
+  a patient whose shift violates it (wide resection, bilateral opening) pays for it instead.
+- **Refining the physics model made it worse.** The harmonic extension went 1.12 → 1.79 → 2.38 mm as the grid
+  went 34³ → 44³ → 54³. That is not discretization error — it is **model bias**: ∇²u = 0 decays faster than the
+  real field, under-predicting the shift at depth (80% → 67% → 57% of truth). The coarse grid looked better only
+  because its Dirichlet boundary sat a cell *inside* the true surface and pushed the surface displacement
+  deeper — cancelling error, not correcting it. A grid-convergence study proves you solved the equation;
+  it says nothing about whether it was the right equation.
+- **The right number of degrees of freedom moves with the data.** The best TPS control-point count is 170 at
+  45° exposure and 600 at 110° — the same knob as λ, and no measurable quantity tells you where it sits. This
+  is why TPS *degrades* from 0.65 to 1.43 mm in the sweep above: a fixed budget spread over more surface
+  under-samples the region that actually varies.
+- **Depth is the limit.** At 70° exposure the shallowest target (20 mm, 9.9 mm of true shift) still keeps
+  1.7–2.1 mm of error while the 50 mm target lands at 0.22 mm. Surface data reaches inward only as far as the
+  model carries it.
+- **FRE ≠ TRE returns, harder.** At 110° the method with the smallest surface residual (harmonic, 1.00 mm) has
+  the *largest* deep error of the deformable three. The measurable quantity ranks the methods wrong.
+- Honest scope: the deformation field is synthetic (ground truth at depth is unobtainable otherwise) and
+  correspondences are given, so the absolute numbers are optimistic — read the **relative** comparison. The
+  harmonic extension is a simplified cousin of a linear-elastic FEM, and this experiment shows it behaving as
+  a *biased* one.
+
+![deformable registration](assets/51_deformable_registration.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1350,6 +1397,7 @@ python scripts/47_needle_impedance.py        # tissue contact: position vs imped
 python scripts/48_flexible_needle.py         # needle bending and spin compensation
 python scripts/49_registration_real_anatomy.py  # real human MR scan (downloads to data_cache/)
 python scripts/50_teleoperation_delay.py     # teleoperation: delay, passivity, virtual fixtures
+python scripts/51_deformable_registration.py # deformable registration: brain shift, priors, model bias
 pytest -q
 ```
 
@@ -1411,6 +1459,7 @@ scripts/
   48_flexible_needle.py         bevel-induced bending (beam solve) + spin compensation
   49_registration_real_anatomy.py  real human MR scan: landmark+surface registration, where to probe
   50_teleoperation_delay.py     teleoperation under delay: bilateral control, passivity, virtual fixtures
+  51_deformable_registration.py deformable registration: TPS vs physics prior, model bias, depth reach
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
