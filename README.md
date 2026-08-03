@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-52 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+53 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -58,7 +58,8 @@ identification loop on published UR5 parameters → registration validated on re
 spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
 impedance control, a flexible needle steered by its own spin → registration on a real human
 MR scan → teleoperation under delay → deformable registration, where the rigid assumption
-finally breaks → and probing that assumption with an observation it cannot fake.**
+finally breaks → probing that assumption with an observation it cannot fake → and making that
+observation honest, since measuring the tissue also moves it.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -112,6 +113,7 @@ finally breaks → and probing that assumption with an observation it cannot fak
 | 50 | **teleoperation under delay** (bilateral, passivity, virtual fixtures) | P-P chatters from 50 ms; wave variables hold at 200 ms with 15× better force fidelity; a safety wall must be rendered **locally** |
 | 51 | **deformable registration** (brain shift on the real MR head) | rigid leaves the full 5.7 mm shift; through a 4% window the **prior**, not the interpolator, wins (3.3 → 0.6 mm); refining the physics grid makes it **worse** |
 | 52 | **probing the prior** (sub-surface observation) | a deformation mode leaving 0.03 mm at the surface costs 3.5 mm at depth; the surface gate is chance (AUROC 0.52), one depth check is 0.81 — the first observations buy knowing, not fixing |
+| 53 | **when measuring changes what you measure** | probe pressure is a bias, so 32× more data does not remove it (its share grows 13% → 31%); with the check made by the same sensor the gate falls 0.73 → 0.61 and no remedy lifts it |
 
 ## Experiments
 
@@ -1379,6 +1381,63 @@ simulated patients have it, half do not.
 
 ![probing the prior](assets/52_probing_the_prior.png)
 
+### 53. When measuring changes what you measure (`scripts/53_measurement_changes_it.py`)
+#52's ultrasound was ideal: ground-truth displacement plus isotropic noise, and — more importantly —
+the *check* was ideal too. Real iUS differs in three ways, and each breaks a different thing.
+
+**(a) The probe presses on the tissue it is measuring.** A 2–5 mm indentation propagates inward, biasing
+the reading by 2.73 mm at 20 mm depth and 0.99 mm at 45 mm. The direction is always inward, so it is a
+**bias, not noise**:
+
+| depth observations | 1 | 2 | 4 | 8 | 16 | 32 |
+|--|--:|--:|--:|--:|--:|--:|
+| ideal sensor | 3.00 | 2.80 | 2.05 | 1.67 | 1.44 | **1.16** |
+| + probe indentation | 3.46 | 2.85 | 2.30 | 1.80 | 1.64 | **1.68** |
+
+The two curves run parallel — the gap is +0.46 mm at one observation and +0.52 mm at thirty-two. Noise
+falls as √N; the bias does not, so **its share of the total error grows from 13% to 31%**. Collecting
+more data does not fight a systematic error, it *promotes* it to dominant term. Modelling the
+indentation out recovers everything (1.16 mm) if the tissue response length is known exactly, and leaves
+1.37 mm at a 30% model error — you must know the model to subtract it, and the model is also wrong.
+
+**(b) Noise grows with depth** (σ 2.1 mm at 20 mm → 3.6 mm at 70 mm): the measurements you need most are
+the ones you can trust least. Weighting by the known σ(d) recovers 1.82 → 1.59 mm, about 12%. Weighting
+*reports* information; it does not create it.
+
+**(c) 15% of features mismatch**, which takes least squares from 1.16 to 2.34 mm; a robust fit returns
+1.63 mm. Getting that robust fit to work needed three things, and the first two attempts failed
+honestly: plain Huber IRLS gained nothing because a TPS simply *interpolates* the outliers, so their
+residuals vanish (fixed by annealing λ from 100× down — stiff first, so outliers stick out); Huber's
+1/r tail then only quadrupled λ on a 20 mm blunder, not enough to exclude it (fixed by a redescending
+Tukey weight); and a MAD scale over the mixed control set deleted the *depth* observations as outliers
+because the dense surface points dominated the scale — robust estimation assumes outliers are a minority
+of one population, and these were a different population. Normalising residuals by the **known** σᵢ and
+applying the weight only where an outlier mechanism exists fixed it. Robustness is also not free: below
+four observations it *loses*, since discarding one point costs more than the outlier does.
+
+**(d) The check is made with the same sensor** — this is the one that hurts.
+
+| sensor | 1 check | 2 | 3 | 5 | error after 4 correcting obs |
+|--|--:|--:|--:|--:|--:|
+| ideal (#52) | 0.73 | 0.84 | 0.87 | **0.92** | 1.43 mm |
+| realistic, uncorrected | 0.61 | 0.64 | 0.60 | 0.57 | 2.84 mm |
+| realistic + all three remedies | 0.62 | 0.60 | 0.62 | 0.65 | **1.82 mm** |
+
+The remedies rescue the correction (2.84 → 1.82 mm) and do **nothing** for the gate, which sits near 0.6
+however many check points are added. The reason is specific rather than mysterious: at the target depths
+the signal (2–6 mm) is already below the single-point check noise (σ(d)·√3 = 3.6–6.2 mm). De-indentation
+and robustness target bias and outliers; the check is limited by neither. **A remedy only fixes the
+error term it aims at, and the gate's ceiling is set by the modality, not by the statistic.** #52's
+0.81 was, in part, an artefact of assuming the verification measurement was perfect.
+
+- Honest scope: the indentation field is one Gaussian (real tissue is nonlinear and viscoelastic and
+  relaxes after loading); de-indentation assumes contact position and press depth are known from a
+  tracked probe and force sensor; σ(d) is isotropic where real ultrasound is strongly anisotropic; and
+  the outliers are random-direction, whereas real mismatches attach to similar-looking structures and are
+  therefore *harder* for a robust kernel to reject.
+
+![measurement changes it](assets/53_measurement_changes_it.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1443,6 +1502,7 @@ python scripts/49_registration_real_anatomy.py  # real human MR scan (downloads 
 python scripts/50_teleoperation_delay.py     # teleoperation: delay, passivity, virtual fixtures
 python scripts/51_deformable_registration.py # deformable registration: brain shift, priors, model bias
 python scripts/52_probing_the_prior.py       # checking the prior with sub-surface observations
+python scripts/53_measurement_changes_it.py  # non-ideal ultrasound: probe pressure, depth noise, outliers
 pytest -q
 ```
 
@@ -1506,6 +1566,7 @@ scripts/
   50_teleoperation_delay.py     teleoperation under delay: bilateral control, passivity, virtual fixtures
   51_deformable_registration.py deformable registration: TPS vs physics prior, model bias, depth reach
   52_probing_the_prior.py       checking the prior: an unobservable deformation mode and iUS depth checks
+  53_measurement_changes_it.py  non-ideal iUS: probe indentation bias, depth-dependent noise, robust fit
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
