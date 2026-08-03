@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-51 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+52 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -57,8 +57,8 @@ patient-to-image registration → an image-guided targeting capstone with a full
 identification loop on published UR5 parameters → registration validated on real laser scans → a 6-DOF
 spatial upgrade of the whole chain → closing the structural gap the loop had left open → tissue contact,
 impedance control, a flexible needle steered by its own spin → registration on a real human
-MR scan → teleoperation under delay → and deformable registration, where the rigid assumption
-finally breaks.**
+MR scan → teleoperation under delay → deformable registration, where the rigid assumption
+finally breaks → and probing that assumption with an observation it cannot fake.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -111,6 +111,7 @@ finally breaks.**
 | 49 | **registration on a real human MR scan** | where you probe matters (**2.6×**); the clinical verification point detects 100% of failures where the covariance gate gets 44% |
 | 50 | **teleoperation under delay** (bilateral, passivity, virtual fixtures) | P-P chatters from 50 ms; wave variables hold at 200 ms with 15× better force fidelity; a safety wall must be rendered **locally** |
 | 51 | **deformable registration** (brain shift on the real MR head) | rigid leaves the full 5.7 mm shift; through a 4% window the **prior**, not the interpolator, wins (3.3 → 0.6 mm); refining the physics grid makes it **worse** |
+| 52 | **probing the prior** (sub-surface observation) | a deformation mode leaving 0.03 mm at the surface costs 3.5 mm at depth; the surface gate is chance (AUROC 0.52), one depth check is 0.81 — the first observations buy knowing, not fixing |
 
 ## Experiments
 
@@ -1335,6 +1336,49 @@ from it. A synthetic-but-plausible field is applied to the real MR head so groun
 
 ![deformable registration](assets/51_deformable_registration.png)
 
+### 52. Probing the prior (`scripts/52_probing_the_prior.py`)
+#51 ended on an uncomfortable note: the assumption that bought 5.5× accuracy is never checked against the
+patient it is applied to. This experiment attacks that directly by adding a deformation mode the surface
+**cannot** see and an observation that can — intraoperative ultrasound measuring displacement at a few
+points below the craniotomy (σ 1.5 mm, worse than the optical tracker).
+
+The hidden mode is a lateral displacement localized around 45 mm depth. It leaves **0.03 mm mean trace on
+the exposed surface** (below the 1.0 mm probe noise) while costing 2–6 mm at the targets. Half the
+simulated patients have it, half do not.
+
+| | surface-explained patient | patient with the hidden mode |
+|--|----------:|----------:|
+| surface residual (what you can measure) | 1.74 mm | **1.74 mm** |
+| target error, surface + prior | 0.64 mm | **3.51 mm** |
+| target error, surface + depth data, no prior | 0.97 mm | 3.77 mm |
+
+- **This is an observability problem, not an algorithm problem.** With zero depth observations, prior and
+  no-prior land in the same place on the hidden-mode patient (3.77 vs 3.77 mm) — there is nothing in the
+  surface data to be clever with. It is the same failure as the IMU bias without measurements (#4, #37)
+  and stiction without low-speed excitation (#43, #46): *what is not observed is not estimated.*
+- **The only quantity we can currently measure is exactly useless here.** Gating on the surface residual
+  scores **AUROC 0.52** — chance. Over 300 simulated patients, 88% of hidden-mode cases exceed the 2 mm
+  tolerance and none of them are flagged.
+- **One depth observation, held out of the fit, changes that: AUROC 0.81** (two → 0.85, three → 0.90).
+  Placing it near the planned target beats placing it anywhere in the ultrasound cone (0.81 vs 0.71),
+  though the gap is modest here because the synthetic mode is wide — a more localized violation would
+  widen it.
+- **The first observations buy knowing rather than fixing.** Spent on checking, one observation takes
+  discrimination 0.52 → 0.81; spent on correcting, it takes the error only 3.10 → 2.49 mm, still outside
+  tolerance. Four gets to 1.84, eight to 1.50.
+- **The gate has a ceiling set by the modality, not the maths.** The check cannot resolve violations much
+  below its own noise (σ 1.5 mm) against a 2 mm tolerance. No better statistic fixes that.
+- **Honest negative:** the gated policy (check with 2, escalate to 4 if refuted) does **not** beat simply
+  taking 4 observations always (1.38 vs 1.47 mm median, but 33% vs 28% unsafe). If observations are cheap,
+  take them. The gate earns its keep when they are expensive — and, more importantly, when the error
+  cannot be fixed at all, because it converts a silent failure into a stated one.
+- Honest scope: ultrasound is modelled as ground-truth displacement plus isotropic noise; real iUS
+  degrades with depth, mismatches features, and *changes the deformation by pressing on it*. The
+  violation is a single Gaussian mode; one that falls outside the imaging cone would not be refutable at
+  all by this setup.
+
+![probing the prior](assets/52_probing_the_prior.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1398,6 +1442,7 @@ python scripts/48_flexible_needle.py         # needle bending and spin compensat
 python scripts/49_registration_real_anatomy.py  # real human MR scan (downloads to data_cache/)
 python scripts/50_teleoperation_delay.py     # teleoperation: delay, passivity, virtual fixtures
 python scripts/51_deformable_registration.py # deformable registration: brain shift, priors, model bias
+python scripts/52_probing_the_prior.py       # checking the prior with sub-surface observations
 pytest -q
 ```
 
@@ -1460,6 +1505,7 @@ scripts/
   49_registration_real_anatomy.py  real human MR scan: landmark+surface registration, where to probe
   50_teleoperation_delay.py     teleoperation under delay: bilateral control, passivity, virtual fixtures
   51_deformable_registration.py deformable registration: TPS vs physics prior, model bias, depth reach
+  52_probing_the_prior.py       checking the prior: an unobservable deformation mode and iUS depth checks
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

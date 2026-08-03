@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–51.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–52.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -24,7 +24,8 @@ channel (#50), and the anatomy may **deform** between imaging and intervention (
 Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_image_guided_6dof.py`
 (spatial UR5 + real scan), `47_needle_impedance.py` (contact), `49_registration_real_anatomy.py`
 (real human MR), `50_teleoperation_delay.py` (human in the loop),
-`51_deformable_registration.py` (non-rigid anatomy).
+`51_deformable_registration.py` (non-rigid anatomy), `52_probing_the_prior.py` (checking the
+deformation model's assumptions against a sub-surface observation).
 
 ## 2. Requirements (verifiable)
 
@@ -41,6 +42,7 @@ Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_i
 | R9 | With a human in the loop, the force channel shall remain passive and the displayed force shall represent the environment | channel energy ≥ 0 (0.028–0.032 J for wave variables vs 0.185 J injected by P-P); force error 4.01 → 0.19 N at 200 ms | `test_communication_channel_is_passive_for_wave_variables`, `test_wave_variables_stay_stable_at_large_delay`, `test_pp_reflects_the_coupling_spring_not_the_environment` |
 | R10 | An active constraint (virtual fixture) shall be enforced without becoming a source of instability | local rendering holds at 50 000 N/m (17.08 → 0.10 mm); the same wall through a 50 ms path chatters at 800 N/m and diverges above | `test_virtual_fixture_must_be_rendered_locally` |
 | R11 | Where the anatomy deforms, the residual error the rigid model cannot remove shall be quantified, and any deformation correction shall be justified by its assumptions rather than by surface fit | rigid leaves the full shift at depth (9.98/6.02/4.10/2.66 mm at 20/35/50/70 mm); the skull prior, not the interpolator, recovers it through a 4% window (3.31 → 0.60 mm) | `test_rigid_registration_leaves_the_whole_deformation_at_the_target`, `test_the_prior_not_the_interpolator_wins_at_narrow_exposure`, `test_surface_residual_does_not_rank_methods_by_deep_accuracy` |
+| R12 | The assumptions a deformation correction relies on shall be checkable against an observation that is independent of the data they are applied to | surface residual as a gate scores AUROC 0.52 (chance); one held-out sub-surface observation scores 0.81, three score 0.90 | `test_a_depth_check_beats_the_surface_check`, `test_surface_only_cannot_recover_the_deep_mode`, `test_more_check_points_do_not_hurt` |
 
 ## 3. Hazard analysis
 
@@ -63,16 +65,18 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H12 | The safety constraint itself destabilises the system | A virtual fixture rendered across the delayed channel | S3 | Med | Constraint rendered **locally** on the master | `test_virtual_fixture_must_be_rendered_locally` (0.10 mm local vs divergence remote) | Local rendering means the constraint uses the master's *model* of where the forbidden zone is — a stale or misregistered model enforces the wrong wall confidently. Links back to H1. |
 | H13 | Tissue deforms between imaging and intervention; the rigid registration is confidently wrong | Brain shift (gravity, CSF loss, retraction), breathing, retraction | S3 | High | Deformation recovered from the exposed surface; the correction's prior stated explicitly and its failure mode measured | `test_rigid_registration_leaves_the_whole_deformation_at_the_target`, `test_deformable_recovers_most_of_the_shift`, `test_the_prior_stops_paying_when_data_is_plentiful` | **Residual: the correction is only as good as its prior.** The skull assumption that buys 5.5× through a narrow window is an assumption about *this* patient; where it fails (wide resection, bilateral opening) the same regularization becomes a bias. Correspondences here are given, not found. |
 | H14 | A deformation model is trusted because it is "physics-based" | Model bias mistaken for numerical error; grid-convergence read as validation | S2 | Med | Grid refinement run as an experiment, not an assumption; predicted vs true displacement reported at depth | `test_finer_grid_makes_the_harmonic_model_worse` (1.12 → 2.38 mm as the grid refines; 80% → 57% of the true shift) | Convergence testing verifies the solver, not the model. The coarse grid that scored best was cancelling error, not correcting it — with no ground truth, this would have been invisible. |
+| H15 | Deformation occurs in a mode the intraoperative data cannot observe, and the correction reports success anyway | Displacement localized at depth (ventricular collapse, deep relaxation) leaves no trace on the exposed surface | S3 | Med | The failure mode is constructed and measured, not assumed away; a sub-surface observation held out of the fit is used as the check, placed near the target | `test_deep_mode_is_invisible_at_the_surface_by_construction` (0.03 mm surface trace vs 3.5 mm at depth), `test_surface_only_cannot_recover_the_deep_mode`, `test_a_depth_check_beats_the_surface_check` (AUROC 0.52 → 0.81) | **This is an observability limit, not an algorithm gap.** No processing of surface data recovers it. The check itself is bounded by the modality: with σ 1.5 mm ultrasound against a 2 mm tolerance the gate ceilings around AUROC 0.9, and a violation outside the imaging cone is not refutable at all. |
+| H16 | A safety gate is added where simply taking more measurements would have been better | Gate complexity adopted without comparing against the do-everything baseline | S1 | Med | The gated policy is scored against "always take 4 observations" rather than only against the ungated baseline | `test_knowing_is_cheaper_than_fixing_at_the_first_observation`; policy table in #52 (gated 1.38 mm / 33% unsafe vs always-4 1.47 mm / 28% unsafe) | Recorded as a **negative result**: gating did not beat measuring more. Its value is confined to expensive-observation regimes and to cases the correction cannot fix, where the gate converts a silent failure into a stated one. |
 
 ## 4. Traceability summary
 
-- **156 tests, all passing** (`pytest -q`, ~5 min). Every experiment has at least one test; the
-  medical chain (39–51) carries **86** of them, distributed as: kinematics 4, dynamics 3, planar
+- **167 tests, all passing** (`pytest -q`, ~6 min). Every experiment has at least one test; the
+  medical chain (39–52) carries **97** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
-  contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12. The browser
-  demo's core is separately verified headless (`tests/guided_demo_check.js` via node, skipped when node
-  is absent) so the demo cannot claim an ordering the maths does not support.
-- Requirements R1–R11 above each name the tests that verify them; hazards H1–H14 each name the tests
+  contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
+  prior 11. The browser demo's core is separately verified headless (`tests/guided_demo_check.js` via
+  node, skipped when node is absent) so the demo cannot claim an ordering the maths does not support.
+- Requirements R1–R12 above each name the tests that verify them; hazards H1–H16 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -88,13 +92,17 @@ The dominant residual risks are, in order:
    MR at a 2 mm tolerance. Only an *independent* check (a verification point not used in the fit)
    reached 100%. The lesson is architectural: safety must not depend on a statistic derived from the
    same fit it is judging.
-2. **Assumptions bought as regularization** (H13/H14). #51 quantified the rigid gap — the full shift at
-   the target, 2.7–10 mm here — and showed it can be recovered to sub-millimetre. But what recovered it
-   through a narrow exposure was a *prior* ("the skull holds the scalp outside the window"), not the
+2. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
+   at the target, 2.7–10 mm here — and showed it can be recovered to sub-millimetre. But what recovered
+   it through a narrow exposure was a *prior* ("the skull holds the scalp outside the window"), not the
    interpolator, and the volumetric physics model was measurably **biased** in a way grid refinement made
    worse, not better. So the residual risk did not disappear; it changed shape, from "the model is too
-   simple" to "the model asserts something about this patient that may not be true." The needle model
-   carries the same shape of risk (small-angle beam, simplified tissue channel).
+   simple" to "the model asserts something about this patient that may not be true." #52 then showed the
+   sharpest version: a deformation mode that leaves 0.03 mm on the exposed surface and 3.5 mm at the
+   target is not detectable by *any* function of the surface data (gate AUROC 0.52), and one held-out
+   sub-surface observation raises that to 0.81. **The mitigation for this class of risk is a different
+   observation, not a better estimator** — and the check inherits the modality's noise floor. The needle
+   model carries the same shape of risk (small-angle beam, simplified tissue channel).
 3. **Everything is simulated below the interface** (H4/H5/H6). The "real" arm is a deliberately
    mismatched simulation without backlash, joint elasticity or gear nonlinearity; force sensing is
    ideal. Stability margins that depend on sensor noise and delay are therefore unverified.
@@ -105,13 +113,15 @@ The dominant residual risks are, in order:
 
 ## 6. What would come next in a real V&V effort
 
-- Verification points **near the target**, not only on the surface (H2) — #51 makes this sharper: the
-  surface residual ranked the deformation methods *wrong* at wide exposure.
+- ~~Verification points **near the target**, not only on the surface (H2)~~ — done in #52: a held-out
+  sub-surface observation near the planned target scores AUROC 0.81 vs 0.71 for one placed anywhere in
+  the imaging cone, and vs 0.52 for the surface residual. What remains is *where exactly* to place it
+  when the violation is localized and may fall outside the imaging cone.
+- ~~A deformation model whose assumptions are **testable intraoperatively** (H13/H14)~~ — addressed in
+  #52 with a modelled ultrasound depth check. What remains is a modality model that is not idealized:
+  depth-dependent quality, feature mismatch, and the probe changing the deformation it measures.
 - Closed-loop bending compensation with tip tracking (H3).
 - Force-sensor noise/delay model and a passivity argument for the contact controller (H5).
-- A deformation model whose assumptions are **testable intraoperatively** (H13/H14) — the prior that
-  buys the accuracy is currently unverifiable from the data it is applied to. An intraoperative modality
-  (ultrasound, stereovision) that observes displacement *below* the surface would turn it into evidence.
 - Bone-based landmarks where available (H2).
 - Time-domain passivity control for a jittering, lossy channel (H11).
 - Software lifecycle artefacts (configuration management, change control, unit-level requirements
@@ -119,7 +129,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–51
+- Experiments and measured numbers: [README](README.md) §39–52
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)
