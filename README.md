@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-54 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+55 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -60,7 +60,8 @@ impedance control, a flexible needle steered by its own spin → registration on
 MR scan → teleoperation under delay → deformable registration, where the rigid assumption
 finally breaks → probing that assumption with an observation it cannot fake → and making that
 observation honest, since measuring the tissue also moves it → and closing the last open loop in the
-chain, where the answer turned out not to be the sensor.**
+chain, where the answer turned out not to be the sensor → and finally removing the last thing every
+one of those experiments was given for free: the correspondences themselves.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -116,6 +117,7 @@ chain, where the answer turned out not to be the sensor.**
 | 52 | **probing the prior** (sub-surface observation) | a deformation mode leaving 0.03 mm at the surface costs 3.5 mm at depth; the surface gate is chance (AUROC 0.52), one depth check is 0.81 — the first observations buy knowing, not fixing |
 | 53 | **when measuring changes what you measure** | probe pressure is a bias, so 32× more data does not remove it (its share grows 13% → 31%); with the check made by the same sensor the gate falls 0.73 → 0.61 and no remedy lifts it |
 | 54 | **closed-loop needle steering** (closes #48's open loop) | an ablation shows the tip measurement buys **nothing** — the gain was a better default; switching actuation so you can correct *again* is what works (p90 0.98 → 0.37 mm) |
+| 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **no surface residual**, so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it |
 
 ## Experiments
 
@@ -1502,6 +1504,61 @@ the next effort has changed — which is the same lesson as #42's error budget, 
 
 ![closed-loop needle](assets/54_closed_loop_needle.png)
 
+### 55. Correspondence search (`scripts/55_correspondence_search.py`)
+Every deformable-registration experiment above (#51–#54) was handed the **correspondences**: which model
+point each probe sample came from. In reality you have to find them, usually by nearest point. This
+removes that last given, and the cost is not just another error term — it is structural.
+
+Split the deformation into two parts. The **normal** component moves the surface in or out, changing its
+shape, so nearest-point search can see it. The **tangential** component slides the surface *along
+itself* — and a smooth surface slid along itself is the same surface. Nearest point cannot see it, and it
+leaves no residual. This is the **aperture problem** of optical flow, appearing on a deforming anatomical
+surface.
+
+| tangential slide | correspondence error | surface residual | normal component recovered |
+|--:|--:|--:|--:|
+| 0 mm | 0.48 mm | 0.92 mm | 92% |
+| 2 mm | 0.60 mm | 0.89 mm | 93% |
+| 5 mm | 0.93 mm | 1.07 mm | 92% |
+| 8 mm | **1.53 mm** | **1.17 mm** | 94% |
+
+The correspondence error tracks the slide; the measurable residual barely moves. **What can be seen is
+recovered well, and what cannot leaves no trace at all.**
+
+**Finding correspondences costs 2.6×** — 0.54 mm with ground truth, 1.41 mm with nearest point (over 10
+seeds, deep-target error). That is the size of the assumption #51–#54 were carrying. And the three
+standard remedies all fail:
+
+- **Point-to-plane makes it worse** (1.75 mm) while *lowering* the surface residual (0.55 vs 0.99 mm) —
+  the measurable metric betraying the true one yet again. Discarding the whole tangential residual is
+  correct when that residual is pure noise; here nearest point has already annihilated most of the slide,
+  so what remains contains real signal.
+- **A handful of identifiable landmarks does nothing** — 2 to 16 curvature-distinctive anchors give
+  1.37–1.80 mm. The bias is spread across the *entire* window, and a few anchors cannot cover a field.
+- **A robust kernel is nearly powerless** (1.76 → 1.62 mm), for a reason particular to this failure:
+  displace an observation by 6–15 mm and nearest point obligingly finds *a different surface point near
+  where it landed*. The correspondence is wrong but the displacement vector is small and plausible, so a
+  residual-based kernel has nothing to look at — exactly the case #53 flagged as harder than random
+  outliers. **A gross outlier is wrong data; tangential slide is absent data. Different diseases.**
+
+So the useful question is not which estimator to use but **what fraction of correspondences must come
+from non-geometric evidence** (cortical vessel patterns via stereovision, implanted markers):
+
+| fixed by non-geometric evidence | 0% | 10% | 25% | 50% | 100% |
+|--|--:|--:|--:|--:|--:|
+| deep-target error | 1.41 | 1.23 | 1.13 | 0.74 | 0.54 mm |
+
+Roughly linear. **There is no cheap fix** — not a few landmarks, but correspondence across the whole
+exposed surface.
+
+- Honest scope: the field is synthetic and split cleanly into normal and tangential parts; on a highly
+  curved surface a tangential slide *does* change geometry and becomes partly observable, so this pushes
+  the effect to its extreme. Feature correspondences are given as ground truth (with landmark noise);
+  the nearest-point step is computed once rather than iterated to convergence, which would recover a
+  little more of the normal component and none of the tangential.
+
+![correspondence search](assets/55_correspondence_search.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1568,6 +1625,7 @@ python scripts/51_deformable_registration.py # deformable registration: brain sh
 python scripts/52_probing_the_prior.py       # checking the prior with sub-surface observations
 python scripts/53_measurement_changes_it.py  # non-ideal ultrasound: probe pressure, depth noise, outliers
 python scripts/54_closed_loop_needle.py      # closed-loop needle steering: estimate vs control authority
+python scripts/55_correspondence_search.py   # finding correspondences: the aperture problem on a surface
 pytest -q
 ```
 
@@ -1633,6 +1691,7 @@ scripts/
   52_probing_the_prior.py       checking the prior: an unobservable deformation mode and iUS depth checks
   53_measurement_changes_it.py  non-ideal iUS: probe indentation bias, depth-dependent noise, robust fit
   54_closed_loop_needle.py      closed-loop bevel steering: online curvature ID, ablation, duty cycling
+  55_correspondence_search.py   correspondence search under deformation: tangential slide is unobservable
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

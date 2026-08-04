@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–54.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–55.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -19,7 +19,7 @@ A robot places a needle-like tool at a target planned in a pre-operative image, 
 structure, on a **rigid phantom**. The chain is: register the phantom to the image → map the plan into
 robot coordinates → solve inverse kinematics → track the trajectory → (optionally) insert into tissue.
 Two extensions are covered separately: the tool may be **teleoperated** by a human over a delayed
-channel (#50), and the anatomy may **deform** between imaging and intervention (#51–#53).
+channel (#50), and the anatomy may **deform** between imaging and intervention (#51–#53, #55).
 
 Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_image_guided_6dof.py`
 (spatial UR5 + real scan), `47_needle_impedance.py` (contact), `49_registration_real_anatomy.py`
@@ -27,7 +27,7 @@ Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_i
 `51_deformable_registration.py` (non-rigid anatomy), `52_probing_the_prior.py` (checking the
 deformation model's assumptions against a sub-surface observation), `53_measurement_changes_it.py`
 (the same check with a non-ideal intraoperative modality), `54_closed_loop_needle.py` (closing the
-open-loop bending compensation).
+open-loop bending compensation), `55_correspondence_search.py` (removing the correspondence assumption).
 
 ## 2. Requirements (verifiable)
 
@@ -48,6 +48,7 @@ open-loop bending compensation).
 | R13 | Accuracy claims shall be stated for the **measurement chain that will actually be used**, including the sensor's bias, its noise-vs-depth behaviour, and its failure rate | with a non-ideal iUS the same gate falls 0.73 → 0.61 and the correction 1.43 → 2.84 mm; remedies return the correction to 1.82 mm but not the gate | `test_the_gate_degrades_when_the_check_uses_the_same_sensor`, `test_remedies_fix_the_correction_not_the_gate`, `test_random_noise_averages_out_but_bias_does_not` |
 | R14 | Results shall be reproducible from the published script | identical output across runs, verified by a test that calls the experiment twice | `test_main_is_reproducible` |
 | R15 | Where a compensation is open-loop, closing it shall be justified by an ablation that separates the measurement's contribution from the rest | the tip measurement adds nothing over a zero-measurement prior policy (0.49 vs 0.50 mm p90); the gain comes from actuation that can act again (0.98 → 0.37 mm) | `test_measurement_contributes_almost_nothing_with_one_shot_flip`, `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_repeated_replanning_is_where_duty_wins` |
+| R16 | Any accuracy claim that assumes known correspondences shall be restated with correspondences actually searched for | ground-truth correspondence 0.54 mm vs nearest-point 1.41 mm (2.6x) on the same deformation and exposure | `test_finding_correspondence_costs_a_real_multiple`, `test_correspondence_error_tracks_the_slide_while_residual_does_not` |
 
 ## 3. Hazard analysis
 
@@ -77,17 +78,19 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H19 | A robust estimator discards the informative minority | Robust scale estimated over a heterogeneous control set; the dense majority sets the scale | S2 | Med | Residuals normalised by **known** σᵢ and the robust weight applied only where an outlier mechanism exists; annealed λ so a flexible warp cannot hide outliers | `test_robust_fit_beats_least_squares_with_outliers`, `test_outliers_break_least_squares_and_robust_recovers` | Found the hard way: a MAD scale over surface+anchor+depth points deleted the depth observations. Robustness also costs below four observations, where rejecting one point hurts more than the outlier. Real mismatches attach to similar structures and are correspondingly harder to reject than the random-direction ones modelled here. |
 | H20 | Adding feedback is credited with an improvement it did not cause | The closed loop also changes the default and the timing; without an ablation all of it is attributed to the measurement | S2 | High | Two zero-measurement baselines added (plan from the population mean; flip at the decision depth with no estimate) | `test_measurement_contributes_almost_nothing_with_one_shot_flip` (prior-only 0.49 vs MAP 0.50 mm p90), `test_orientation_helps_but_does_not_rescue_the_one_shot_policy` | The honest reading of #54 is that the sensor bought nothing here. Any future "closed loop improved X" claim in this repo is required to carry the same two baselines. |
 | H21 | Effort goes to the sensor when the limit is the actuator | The estimate is visibly poor, so sensing looks like the problem | S1 | Med | Actuation varied with sensing held fixed; the residual re-attributed by handing the controller the true parameters | `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_estimation_is_no_longer_the_bottleneck_under_duty`, `test_sensor_quality_barely_moves_the_duty_result` | Once actuation can act repeatedly, a 10× quieter tip sensor moves p90 by 0.01 mm. The limit is now replanning granularity, saturation and the small-angle model — none of which more sensing fixes. |
+| H22 | The deformation slides along the surface and the surface registration cannot see it | Tangential displacement leaves a smooth surface unchanged, so nearest-point search is blind to it and the residual stays at the noise floor | S3 | High | The normal/tangential split is constructed and measured separately; the correspondence error is reported alongside the residual so the blind component is visible | `test_tangential_slide_does_not_move_a_smooth_surface`, `test_correspondence_error_tracks_the_slide_while_residual_does_not` (0.48 → 1.53 mm correspondence error at a flat 0.92 → 1.17 mm residual) | **Not mitigated by any method tested.** Point-to-plane, landmark anchors and robust kernels all fail; the requirement is non-geometric correspondence (texture, vessel pattern, markers) across the whole exposure, and the benefit is roughly linear in the fraction so partial coverage buys only partial accuracy. |
+| H23 | A wrong correspondence does not look wrong | Nearest-point search maps a displaced observation to a nearby surface point, producing a plausible small displacement from a false match | S2 | High | Outliers injected as observation jumps rather than as large residuals, so the failure is realistic; robust fitting scored against it rather than assumed effective | `test_robust_barely_helps_because_the_outliers_do_not_look_like_outliers` (1.76 → 1.62 mm) | Residual-based rejection has almost nothing to work with. Detecting this needs a consistency check that does not go through the residual — e.g. agreement between independently matched subsets. Not implemented. |
 
 ## 4. Traceability summary
 
-- **194 tests, all passing** (`pytest -q`, ~10 min). Every experiment has at least one test; the
-  medical chain (39–54) carries **124** of them, distributed as: kinematics 4, dynamics 3, planar
+- **204 tests, all passing** (`pytest -q`, ~11 min). Every experiment has at least one test; the
+  medical chain (39–55) carries **134** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R15 above each name the tests that verify them; hazards H1–H21 each name the tests
+- Requirements R1–R16 above each name the tests that verify them; hazards H1–H23 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -103,6 +106,12 @@ The dominant residual risks are, in order:
    MR at a 2 mm tolerance. Only an *independent* check (a verification point not used in the fit)
    reached 100%. The lesson is architectural: safety must not depend on a statistic derived from the
    same fit it is judging.
+2. **Correspondence, not just the warp** (H22/H23). #55 removed the last thing #51–#54 were given: it
+   measured 0.54 mm with true correspondences and **1.41 mm** when they are searched for, and showed the
+   blind component (tangential slide) leaves the measurable residual flat. Point-to-plane, landmarks and
+   robust kernels all failed on it, and the benefit of non-geometric correspondence is roughly linear in
+   coverage — so every deformation number in #51–#54 should be read as **assuming a capability the system
+   does not yet have.**
 2. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
    at the target, 2.7–10 mm here — and showed it can be recovered to sub-millimetre. But what recovered
    it through a narrow exposure was a *prior* ("the skull holds the scalp outside the window"), not the
@@ -148,7 +157,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–54
+- Experiments and measured numbers: [README](README.md) §39–55
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)
