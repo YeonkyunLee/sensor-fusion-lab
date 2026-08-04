@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-53 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+54 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -59,7 +59,8 @@ spatial upgrade of the whole chain → closing the structural gap the loop had l
 impedance control, a flexible needle steered by its own spin → registration on a real human
 MR scan → teleoperation under delay → deformable registration, where the rigid assumption
 finally breaks → probing that assumption with an observation it cannot fake → and making that
-observation honest, since measuring the tissue also moves it.**
+observation honest, since measuring the tissue also moves it → and closing the last open loop in the
+chain, where the answer turned out not to be the sensor.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -114,6 +115,7 @@ observation honest, since measuring the tissue also moves it.**
 | 51 | **deformable registration** (brain shift on the real MR head) | rigid leaves the full 5.7 mm shift; through a 4% window the **prior**, not the interpolator, wins (3.3 → 0.6 mm); refining the physics grid makes it **worse** |
 | 52 | **probing the prior** (sub-surface observation) | a deformation mode leaving 0.03 mm at the surface costs 3.5 mm at depth; the surface gate is chance (AUROC 0.52), one depth check is 0.81 — the first observations buy knowing, not fixing |
 | 53 | **when measuring changes what you measure** | probe pressure is a bias, so 32× more data does not remove it (its share grows 13% → 31%); with the check made by the same sensor the gate falls 0.73 → 0.61 and no remedy lifts it |
+| 54 | **closed-loop needle steering** (closes #48's open loop) | an ablation shows the tip measurement buys **nothing** — the gain was a better default; switching actuation so you can correct *again* is what works (p90 0.98 → 0.37 mm) |
 
 ## Experiments
 
@@ -1438,6 +1440,68 @@ error term it aims at, and the gate's ceiling is set by the modality, not by the
 
 ![measurement changes it](assets/53_measurement_changes_it.png)
 
+### 54. Closed-loop needle steering (`scripts/54_closed_loop_needle.py`)
+#48 cancelled needle bending with a 180° bevel flip at 29.3% of the insertion, and VERIFICATION.md has
+carried the residual ever since: *"bending compensation is open-loop; tissue inhomogeneity changes
+curvature. Needs tip tracking."* This closes that loop — and the answer is not the one the note assumed.
+
+**Why open loop worked at all.** The optimal flip satisfies `F(d_f) = F(L)/2` with
+`F(d) = ∫₀^d (L−u)·κ(u) du` — flip when half the accumulated bending moment has been spent. For a
+*constant* κ this reduces to `L(1−1/√2)` and **κ cancels**, which is why #48 never needed to know the
+curvature. Put a tissue boundary in and it stops cancelling: the optimum now depends on the layer ratio
+r = κ₂/κ₁, moving from 17% (r=0.4) to 38% (r=2.5) of the insertion. At the nominal 29.3% an r=2.5
+patient misses by 1.15 mm.
+
+**The bind.** κ₂ is only observable past the boundary, and tip *position* is the second integral of
+curvature, so its information grows as (S−s_b)²/2. At the moment you must decide (20.5 mm) the estimate
+has σ(κ̂₂) ≈ 35 /m against a population prior of 0.49 /m. And because r>1 pulls the optimum *earlier*,
+waiting to learn means you have already passed it.
+
+**The ablation is the point.** Adding a fourth and fifth baseline — plan from the population mean r̄ with
+*no measurement*, and simply flip at the decision depth with *no estimate* — separates information from
+everything else:
+
+| policy | median | p90 | over 1 mm |
+|--|--:|--:|--:|
+| open loop, nominal r=1 (#48) | 0.42 | 0.98 mm | 9% |
+| **prior only** (mean r̄, zero measurements) | 0.29 | **0.49 mm** | 0% |
+| timing only (flip at 25 mm, no estimate) | 0.21 | 0.50 mm | 0% |
+| measured, least squares | 0.52 | 0.75 mm | 0% |
+| measured + prior (MAP) | 0.29 | **0.50 mm** | 0% |
+| oracle (true r) | 0.01 | 0.01 mm | 0% |
+
+The closed loop looks like a win — 0.98 → 0.50 mm — and **essentially none of it comes from the
+measurement**. A policy that takes zero measurements scores the same. The gain is a better default
+(r=1 → r̄=1.45) plus the timing constraint. Reported without the ablation, this would have been written
+up as feedback working. Giving the sensor orientation as well as position (a 5-DOF EM tracker, where
+information grows as (S−s_b) rather than squared) improves it to 0.47 mm — 6% of the way to the oracle.
+
+**The bottleneck was actuation.** A single flip spends all the authority at once. Switch to #48's other
+policy, duty cycling, which sets the effective curvature continuously — same sensor, same estimator:
+
+| | median | p90 |
+|--|--:|--:|
+| duty, replan ×1 @22 mm | 0.23 | 0.47 mm |
+| duty, replan ×2 | 0.13 | 0.39 mm |
+| duty, replan ×4 | **0.09** | **0.37 mm** |
+| duty ×4 given the *true* κ | 0.01 | 0.36 mm |
+
+Note the first row: **duty with one replan is exactly the flip policy**, because the command saturates
+at u = −1. The gain is not from steering differently, it is from being able to steer *again*. The
+information was never late — the opportunity to use it was singular.
+
+**And the bottleneck moves again.** Handing the controller the true κ improves p90 only 0.37 → 0.36 mm,
+and making the tip sensor 10× quieter moves it 0.38 → 0.37 mm. Estimation has stopped being the limit;
+what remains is replanning granularity, command saturation and the small-angle model. The place to spend
+the next effort has changed — which is the same lesson as #42's error budget, arriving from the other side.
+
+- Honest scope: two layers with a known boundary depth, curvature as a function of depth only,
+  tip measurements as direct observations with isotropic noise and pure lag. Duty cycling is modelled as
+  a proportional effective curvature, which ignores the tissue damage and torsional windup that make real
+  duty cycling costly.
+
+![closed-loop needle](assets/54_closed_loop_needle.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1503,6 +1567,7 @@ python scripts/50_teleoperation_delay.py     # teleoperation: delay, passivity, 
 python scripts/51_deformable_registration.py # deformable registration: brain shift, priors, model bias
 python scripts/52_probing_the_prior.py       # checking the prior with sub-surface observations
 python scripts/53_measurement_changes_it.py  # non-ideal ultrasound: probe pressure, depth noise, outliers
+python scripts/54_closed_loop_needle.py      # closed-loop needle steering: estimate vs control authority
 pytest -q
 ```
 
@@ -1567,6 +1632,7 @@ scripts/
   51_deformable_registration.py deformable registration: TPS vs physics prior, model bias, depth reach
   52_probing_the_prior.py       checking the prior: an unobservable deformation mode and iUS depth checks
   53_measurement_changes_it.py  non-ideal iUS: probe indentation bias, depth-dependent noise, robust fit
+  54_closed_loop_needle.py      closed-loop bevel steering: online curvature ID, ablation, duty cycling
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

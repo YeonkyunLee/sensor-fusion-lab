@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–53.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–54.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -26,7 +26,8 @@ Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_i
 (real human MR), `50_teleoperation_delay.py` (human in the loop),
 `51_deformable_registration.py` (non-rigid anatomy), `52_probing_the_prior.py` (checking the
 deformation model's assumptions against a sub-surface observation), `53_measurement_changes_it.py`
-(the same check with a non-ideal intraoperative modality).
+(the same check with a non-ideal intraoperative modality), `54_closed_loop_needle.py` (closing the
+open-loop bending compensation).
 
 ## 2. Requirements (verifiable)
 
@@ -46,6 +47,7 @@ deformation model's assumptions against a sub-surface observation), `53_measurem
 | R12 | The assumptions a deformation correction relies on shall be checkable against an observation that is independent of the data they are applied to | surface residual as a gate scores AUROC 0.52 (chance); one held-out sub-surface observation scores 0.81, three score 0.90 | `test_a_depth_check_beats_the_surface_check`, `test_surface_only_cannot_recover_the_deep_mode`, `test_more_check_points_do_not_hurt` |
 | R13 | Accuracy claims shall be stated for the **measurement chain that will actually be used**, including the sensor's bias, its noise-vs-depth behaviour, and its failure rate | with a non-ideal iUS the same gate falls 0.73 → 0.61 and the correction 1.43 → 2.84 mm; remedies return the correction to 1.82 mm but not the gate | `test_the_gate_degrades_when_the_check_uses_the_same_sensor`, `test_remedies_fix_the_correction_not_the_gate`, `test_random_noise_averages_out_but_bias_does_not` |
 | R14 | Results shall be reproducible from the published script | identical output across runs, verified by a test that calls the experiment twice | `test_main_is_reproducible` |
+| R15 | Where a compensation is open-loop, closing it shall be justified by an ablation that separates the measurement's contribution from the rest | the tip measurement adds nothing over a zero-measurement prior policy (0.49 vs 0.50 mm p90); the gain comes from actuation that can act again (0.98 → 0.37 mm) | `test_measurement_contributes_almost_nothing_with_one_shot_flip`, `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_repeated_replanning_is_where_duty_wins` |
 
 ## 3. Hazard analysis
 
@@ -56,7 +58,7 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 |--|--|--|--|--|--|--|--|
 | H1 | Tool driven to the wrong place | Registration converged to a wrong basin, or coarse alignment absent | S3 | High | Landmark coarse alignment → surface ICP; multi-start consistency check; independent verification point | `test_landmark_coarse_alignment_is_required` (92.94 → 0.68 mm), `test_consistency_signal_transfers_better_than_covariance`, `test_verification_point_beats_the_covariance_gate` | **Residual: 3.8–5% of executed plans still unsafe in the synthetic study; the covariance signal alone catches only 5% on real scans.** Needs an independent second modality, not another statistic. |
 | H2 | Registration looks good but is wrong (false confidence) | FRE (measurable) does not bound TRE (what matters) | S3 | Med | Never gate on FRE alone; verification point residual (correlates +0.90 with TRE); document the trap | `test_registration_recovers_patient_pose` (FRE vs TRE), exp 41/44 results in README | A surface verification point **underestimates** deep TRE through leverage. Verify near the target, not only on the surface. |
-| H3 | Critical structure hit even though the plan cleared it | Tool modelled as a point; the shaft sweeps a volume; needle bends | S3 | Med | Clearance computed along the **shaft**, not the tip; bending model + spin compensation | `test_shaft_clearance_sees_what_tip_check_cannot`, `test_bending_eats_clearance_and_spin_restores_it` (43% of the corridor) | Bending compensation is **open-loop**; tissue inhomogeneity changes curvature. Needs tip tracking. |
+| H3 | Critical structure hit even though the plan cleared it | Tool modelled as a point; the shaft sweeps a volume; needle bends | S3 | Med | Clearance computed along the **shaft**, not the tip; bending model + spin compensation | `test_shaft_clearance_sees_what_tip_check_cannot`, `test_bending_eats_clearance_and_spin_restores_it` (43% of the corridor) | ~~Bending compensation is open-loop~~ — closed in #54, where an ablation showed the tip measurement contributed nothing and the fix was actuation that can act again (p90 0.98 → 0.37 mm). Remaining: duty cycling's own costs (tissue damage, torsional windup) are not modelled. |
 | H4 | Uncontrolled joint motion / arm lunge | Inverse kinematics near a singularity; unstable gains | S3 | Med | Damped least squares; manipulability monitored along the path; per-joint gain scaling (joint inertias span 2.4 → 1e-4 kg·m²) | `test_dls_bounded_where_pseudo_blows_up`, `test_full_pipeline_registration_dominates_and_control_is_stable` (w ≥ 0.064) | Naive Cartesian impedance was found to diverge (spin mode, 1.2e-4 kg·m²); fixed by operational-space control, but stability limits with real force-sensor noise/delay are untested. |
 | H5 | Excessive force on tissue / breakthrough overshoot | Stiff position control against a discontinuous puncture | S3 | Med | Operational-space impedance with a selectable stiffness; lunge budget picks the operating point | `test_position_control_is_stiffer_impedance_yields`, `test_stiffness_sets_the_tradeoff` | Too-soft control cannot puncture at all — safety and function trade against each other. No force-sensor noise model. |
 | H6 | Silent accuracy loss after a hardware change | Tool swapped → payload/friction differ from the controller model | S2 | High | Residual monitor flags it; log-based identification restores accuracy | `test_loop_closes_the_parametric_gap`, `test_uncalibrated_payload_flips_the_budget` (servo becomes 10× registration) | Identification only covers what the model *can* express: a structural gap plateaus at 0.207 mm and needs a model extension **plus** an excitation that visits the regime. |
@@ -73,17 +75,19 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H17 | The act of measuring changes the thing being measured | Ultrasound probe pressure indents the tissue; the indentation propagates to depth and is always inward | S3 | High | The bias is modelled and measured rather than assumed away; subtracted using tracked contact position and press depth | `test_indentation_is_always_inward_and_decays`, `test_indentation_does_not_average_out_over_contact_points`, `test_de_indentation_recovers_but_needs_the_right_model` | **A bias is not reduced by taking more data** — its share of the error grew 13% → 31% over a 32× increase in observations. Subtracting it requires knowing the tissue response; a 30% error in that model leaves 1.37 vs 1.16 mm. Real tissue is viscoelastic and relaxes, which this model does not capture. |
 | H18 | An accuracy or detection figure is quoted for an idealised sensor and read as achievable | Verification measurements modelled as ground truth plus isotropic noise | S2 | High | Every #52 figure re-measured with a modality that has bias, depth-dependent noise and a 15% mismatch rate — including on the **verification** measurement | `test_the_gate_degrades_when_the_check_uses_the_same_sensor`, `test_depth_weighting_helps_but_does_not_restore` | The gate's ceiling is set by the modality: at target depths the signal (2–6 mm) is below the single-check noise (3.6–6.2 mm), so no statistic and no number of check points recovers #52's figure. Remedies aimed at bias and outliers rescued the correction and did nothing for the gate. |
 | H19 | A robust estimator discards the informative minority | Robust scale estimated over a heterogeneous control set; the dense majority sets the scale | S2 | Med | Residuals normalised by **known** σᵢ and the robust weight applied only where an outlier mechanism exists; annealed λ so a flexible warp cannot hide outliers | `test_robust_fit_beats_least_squares_with_outliers`, `test_outliers_break_least_squares_and_robust_recovers` | Found the hard way: a MAD scale over surface+anchor+depth points deleted the depth observations. Robustness also costs below four observations, where rejecting one point hurts more than the outlier. Real mismatches attach to similar structures and are correspondingly harder to reject than the random-direction ones modelled here. |
+| H20 | Adding feedback is credited with an improvement it did not cause | The closed loop also changes the default and the timing; without an ablation all of it is attributed to the measurement | S2 | High | Two zero-measurement baselines added (plan from the population mean; flip at the decision depth with no estimate) | `test_measurement_contributes_almost_nothing_with_one_shot_flip` (prior-only 0.49 vs MAP 0.50 mm p90), `test_orientation_helps_but_does_not_rescue_the_one_shot_policy` | The honest reading of #54 is that the sensor bought nothing here. Any future "closed loop improved X" claim in this repo is required to carry the same two baselines. |
+| H21 | Effort goes to the sensor when the limit is the actuator | The estimate is visibly poor, so sensing looks like the problem | S1 | Med | Actuation varied with sensing held fixed; the residual re-attributed by handing the controller the true parameters | `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_estimation_is_no_longer_the_bottleneck_under_duty`, `test_sensor_quality_barely_moves_the_duty_result` | Once actuation can act repeatedly, a 10× quieter tip sensor moves p90 by 0.01 mm. The limit is now replanning granularity, saturation and the small-angle model — none of which more sensing fixes. |
 
 ## 4. Traceability summary
 
-- **179 tests, all passing** (`pytest -q`, ~7 min). Every experiment has at least one test; the
-  medical chain (39–53) carries **109** of them, distributed as: kinematics 4, dynamics 3, planar
+- **194 tests, all passing** (`pytest -q`, ~10 min). Every experiment has at least one test; the
+  medical chain (39–54) carries **124** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R14 above each name the tests that verify them; hazards H1–H19 each name the tests
+- Requirements R1–R15 above each name the tests that verify them; hazards H1–H21 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -144,7 +148,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–53
+- Experiments and measured numbers: [README](README.md) §39–54
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)
