@@ -79,6 +79,9 @@ N_SEEDS = 6
 # 큰 두 수의 뺄셈으로 여유를 구하게 되고, 거기서 나는 반올림 오차(~1e-16 J)에 감쇠기가 매 스텝
 # 걸린다 — 처음에 그렇게 짰다가 "아무 문제 없는데 가동률 73%"가 나와서 잡았다.
 ATT_EPS = 1e-12
+# 통신 상실 정지의 국소 위치 유지 이득(exp 58). 팔의 국소 감쇠 D_S 와 같은 자릿수로 두어 별도의
+# 튜닝 손잡이가 되지 않게 한다 — 정지 자체가 새로운 자유도가 되면 "임계값 없는 판정"의 의미가 없다.
+K_HOLD, D_HOLD = 4000.0, 120.0
 
 MODES = ("zoh", "zero", "tdpa", "bigb", "pp")
 
@@ -163,8 +166,9 @@ class Channel:
 # --------------------------------------------------------------------------- #
 def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         b_wave=None, vf_stiffness=0.0, steps=STEPS, energy_mode="cumulative",
-        lam_pos=None, buf_ms=0.0, rate_hz=None, chan=None, lam_gate=False):
-    """한 조건 시뮬레이션.
+        lam_pos=None, buf_ms=0.0, rate_hz=None, chan=None, lam_gate=False,
+        tissue_on=True, b_scale=1.0, estop=False, resume_ms=0.0, blind_mm=1.0):
+    """한 조건 시뮬레이션. exp 56·57·58 이 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
       'zoh'  — 파동변수 + 굶으면 마지막 값 유지 (표준 구현)
@@ -177,6 +181,22 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     chan: 채널 생성자. 기본은 Channel(평균 0 균등 지터 + 독립 베르누이 손실). exp 57 이
           연집 손실·긴 지연 꼬리 채널을 여기에 끼워 넣어 **플랜트와 제어를 그대로 두고 채널만**
           바꾼다 — 이 실험이 exp 50 에 한 것과 같은 방식.
+    lam_gate: 표류 보정 항도 같은 예산(β)으로 함께 죈다. exp 57 이 이걸 켜서 "예산은 파동만
+          죄므로 도구를 못 세운다"를 확인했고, 결과가 **더 나빴다**(그 항이 브레이크였다).
+
+    exp 58 이 쓰는 절제·보완 손잡이 — 끊긴 동안 도구를 멈추는 것이 **설계된 것인지 우연인지**를
+    가리기 위한 것들이다:
+      tissue_on=False — 조직 반력을 뺀다(자유공간 접근 구간). 정지 평형 하나가 사라진다.
+      b_scale        — 팔의 국소 감쇠 배율. 1 미만이면 가볍고 잘 미끄러지는 축이 된다.
+      estop          — **통신 상실 정지**를 켠다. 예산이 아무것도 허락하지 않는 상태(β=0)에서
+                       **움직인 누적 거리**가 blind_mm 을 넘으면 팔이 자기 위치를 국소적으로
+                       붙든다 — 채널을 거치지 않으므로 채널이 죽어도 동작한다(exp 50 의 "벽은
+                       로컬 렌더링"과 같은 원칙을 실패 경로에 적용).
+      blind_mm       — 그 누적 거리 한계 [mm]. **통신 파라미터가 아니라 사슬이 이미 선언해 둔
+                       임상 여유**에서 온다(exp 45 shaft 2.17 mm, exp 48 통로 1.25 mm 계열).
+                       β=0 자체를 트리거로 쓰면 지터가 방향별 80% 를 굶기는 채널에서 너무
+                       자주 걸린다 — 처음에 그렇게 짰다가 정지가 98.5% 걸려 과제를 못 했다.
+      resume_ms      — 정지 해제 시 원래 명령으로 되돌아가는 시간. 0 이면 즉시 복귀(돌진 위험).
     """
     rng = np.random.default_rng(20250805 + 1000 * seed)
     b = (B_WAVE_BIG if mode == "bigb" else (B_WAVE if b_wave is None else b_wave))
@@ -203,16 +223,23 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     e_u_inc = e_w_inc = 0.0          # 증분 모드에서 이번 패킷에 실어 보낼 몫
 
     log = dict(t=[], xm=[], xs=[], fe=[], fm=[], e_ch=[], e_sys=[], beta=[],
-               starved=[])
+               starved=[], held=[])
     e_sys_in = e_sys_out = 0.0       # exp 50 식 시스템 에너지 수지(비교용)
     n_att = 0
     beta_sum = 0.0
     diverged = False
+    # 통신 상실 정지 상태(exp 58)
+    stopped, x_hold, blend, n_estop = False, 0.0, 1.0, 0
+    blind_acc = 0.0                  # 새 정보 없이 움직인 누적 거리 [m]
+    blind_limit = blind_mm * 1e-3    # 선언된 임상 여유 [m] — 통신 파라미터가 아니다
+    n_held = 0
+    resume_vmax = 0.0
+    resume_win = 0                   # 해제 직후 관찰 창 [스텝]
 
     punct_k = None
     for k in range(steps):
         t = k * DT
-        f_e = tissue.force(xs)
+        f_e = tissue.force(xs) if tissue_on else 0.0
         if tissue.punctured and punct_k is None:
             punct_k = k
         do_send = (k % n_step == 0)
@@ -272,7 +299,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                                e_w_sent if energy_mode == "cumulative" else e_w_inc, xs))
 
             f_coup = D_S * vs_cmd
-            f_loc = -D_S * vs
+            f_loc = -D_S * vs * b_scale
             beta = min(beta_u, beta_w)
             if beta < 1.0:
                 n_att += 1
@@ -285,8 +312,51 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             (xs_rx, _, _), fresh_w = ch_sm.recv(k, hold, n_buf)
             f_m_ch = -K_C * (xm - xs_rx)
             f_coup = K_S * (xm_rx - xs)
-            f_loc = -D_S * vs
-            beta = 1.0
+            f_loc = -D_S * vs * b_scale
+            beta_u = beta = 1.0
+
+        # ---- 통신 상실 정지 (exp 58) ----
+        # **판정 기준을 네트워크가 아니라 오차 예산에서 가져온다.** β=0(예산이 아무것도 허락하지
+        # 않음)은 "지금 새 정보 없이 재생 중"이라는 정확한 물리 신호이지만, 지터가 방향별로 80% 를
+        # 굶기는 채널에서는 그 자체로는 너무 자주 성립한다(처음에 그걸 트리거로 썼다가 정지가
+        # 98.5% 걸려 과제를 아예 못 했다). 그래서 **그 상태로 움직인 누적 거리**를 세고, 그 값이
+        # 사슬이 이미 선언해 둔 여유(exp 45 의 shaft 여유 2.17 mm, exp 48 의 통로 1.25 mm 계열)를
+        # 넘을 때 멈춘다. 임계값이 통신 파라미터가 아니라 **해부·계획에서 오는 숫자**가 된다.
+        # 집행은 **국소적**이다: 팔이 자기 위치를 스프링-댐퍼로 붙든다. 채널을 거치지 않으므로
+        # 채널이 죽어 있어도 동작하고, 고정점을 향한 소산 항이라 에너지를 만들지 않는다.
+        if estop and is_wave:
+            # **감시 대상은 위해의 정의와 같은 양이어야 한다.** 처음엔 β=0(예산 고갈) 구간의 이동을
+            # 셌는데, 안전 지표는 "새 표본이 없는 동안 움직인 거리"(굶은 스텝)를 센다 — 전자는
+            # 후자의 부분집합이라 감시가 위해를 덜 본다(맹행 4.14 → 3.23 mm 밖에 못 줄였다).
+            # 그래서 굶은 스텝 기준으로 세고, 새 표본이 들어오면 카운터를 접는다.
+            dry = (k > ch_ms.n0) and not (fresh_u and fresh_w)
+            if not stopped:
+                if dry:
+                    blind_acc += abs(vs) * DT
+                    if blind_acc > blind_limit:
+                        stopped, x_hold, blend = True, xs, 0.0
+                        n_estop += 1
+                else:
+                    blind_acc = 0.0
+            if stopped:
+                # 램프는 **정보가 실제로 오는 스텝에서만** 올라간다. 굶은 스텝에서는 리셋하지 않고
+                # 그대로 멈춰 둔다 — 연속 fresh 를 요구하면 지터 채널에서 영구히 래치된다(처음에
+                # 그렇게 짰다가 정지가 85% 걸려 도구가 12 mm 에서 멈췄다). 부수적으로 좋은 성질이
+                # 하나 붙는다: **링크가 나쁘면 복귀도 느려진다.**
+                if not dry:
+                    blend += DT / max(resume_ms * 1e-3, DT)
+                    if blend >= 1.0:
+                        stopped, blend, blind_acc = False, 1.0, 0.0
+                        resume_win = 100                          # 복귀 후 100 ms 를 관찰한다
+                wgt = min(max(blend, 0.0), 1.0)
+                f_coup = wgt * f_coup + (1.0 - wgt) * (K_HOLD * (x_hold - xs)
+                                                       - D_HOLD * vs)
+                n_held += 1
+            elif resume_win > 0:
+                # 램프 길이와 무관하게 **해제 직후 같은 창**에서 최대 속도를 본다. 램프 구간만
+                # 보면 즉시 복귀(램프 0)가 가장 얌전해 보이는 착시가 생긴다 — 처음에 그랬다.
+                resume_win -= 1
+                resume_vmax = max(resume_vmax, abs(vs))
 
         # ---- 채널 에너지(파동 좌표, 주장이 걸린 블록) ----
         e_ch = (e_u_sent + e_w_sent) - (e_u_ext + e_w_ext) if is_wave else np.nan
@@ -315,6 +385,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         # 이번 스텝에 **새 표본이 없었나**. 굶은 구간에 도구가 얼마나 움직였는지(= 모르는 채로 간
         # 거리)를 뒤에서 재려고 남긴다 — exp 57 이 연집 손실의 안전 비용을 여기서 뽑는다.
         log["starved"].append(0.0 if (fresh_u and fresh_w) else 1.0)
+        log["held"].append(1.0 if (estop and stopped) else 0.0)
 
         if not (abs(xm) < 0.5 and abs(xs) < 0.5 and abs(vm) < 50 and abs(vs) < 50):
             diverged = True
@@ -329,6 +400,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                n_lost=ch_ms.n_lost + ch_sm.n_lost,
                n_stale=ch_ms.n_stale + ch_sm.n_stale,
                n_late=ch_ms.n_late + ch_sm.n_late,
+               n_estop=n_estop, held_frac=n_held / max(len(log["t"]), 1),
+               resume_vmax_mms=resume_vmax * 1e3,
                waste_frac=(ch_ms.n_stale + ch_sm.n_stale + ch_ms.n_late
                            + ch_sm.n_late) / max(ch_ms.n_sent + ch_sm.n_sent, 1),
                att_duty=n_att / max(n, 1),

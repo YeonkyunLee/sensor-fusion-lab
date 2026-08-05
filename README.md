@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-57 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+58 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -122,6 +122,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **no surface residual**, so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it |
 | 56 | **a jittery, lossy channel** (removes #50's constant delay) | nothing happened — because the configuration could not finish the task; once it could, the same jitter created **860×** the energy, in the drift-correction term the passivity proof never covered |
 | 57 | **bursty loss + a heavy delay tail** (removes #56's symmetry) | my prediction was wrong: holding a stale command is **self-limiting**, and the term #56 called a defect is the **brake**. What actually broke is buffer sizing — a playout deadline manufactures loss the network never had (41% at p50) |
+| 58 | **stop when the link is lost** (fixes what #57 exposed) | ablation shows the bound was accidental — blind travel spreads **2.1 → 28.9 mm** depending on which term survives. A local stop triggered by the *declared clinical margin* collapses that to **1.2 → 2.8 mm** and the task still completes; then #57's failed remedy stops being harmful (**R20 verified**) |
 
 ## Experiments
 
@@ -1758,6 +1759,96 @@ and zero-fill collapses further under bursts (depth 22.0 mm of a 55 mm target).
 
 ![bursty channel](assets/57_bursty_channel.png)
 
+### 58. Stop when the link is lost (`scripts/58_stop_when_lost.py`)
+Experiment 57 ended with a rule and an admission. The rule: identify and replace what an
+out-of-guarantee term is silently doing before suppressing it. The admission: a real "communication
+lost → stop" function was still missing, and the bound currently protecting the patient — that holding a
+stale command is self-limiting — belongs to this heavy, well-damped axis rather than to the design. This
+experiment tests that admission and then closes it.
+
+**First, is the bound designed or accidental?** Same channel, same blackouts, ablating one contributor at a
+time with no stop present:
+
+| configuration | worst blind tool travel | travel per step, early → late in a hold |
+|---|--:|--:|
+| all present (#57's condition) | 4.14 mm | 21 → 5 µm |
+| − tissue resistance (free-space approach) | 2.14 mm | 16 → 4 µm |
+| − drift correction λ (#50's wave scheme) | 2.62 mm | 9 → 7 µm |
+| − local damping ×0.5 | 9.72 mm | 47 → 11 µm |
+| − local damping ×0.3 | **28.86 mm** | 118 → 65 µm |
+| − tissue − λ (both) | 3.33 mm | 13 → 13 µm |
+
+**2.1 to 28.9 mm depending on which term happens to survive** — and the early→late decay that #57 called
+self-limiting fades as the damping is cut. The bound was an accident of the plant, exactly as #57
+suspected. (This is the ablation discipline of H20/R15, applied to a *safety* property rather than to a
+performance claim.)
+
+**The stop.** Two design commitments:
+
+- **The trigger comes from the error budget, not from the network.** Integrate the tool's motion while no
+  fresh sample has arrived, and stop when that exceeds a margin the chain already declares (#45's 2.17 mm
+  shaft clearance, #48's 1.25 mm corridor). My first attempt used the physically exact instant instead —
+  β = 0, the energy budget allowing nothing — and it fired constantly, because a jittery channel starves
+  ~80% of steps per direction (#57 §A): the stop engaged **98.5%** of the time and the tool never left
+  4 mm. The instantaneous state was right; what mattered was how far the tool went while in it.
+- **Enforcement is local.** The follower holds *its own* position with a spring-damper, needing no packet
+  to work — the same principle as #50's "a virtual wall must be rendered locally", now applied to the
+  failure path. Being a dissipative pull toward a fixed point, it cannot create energy (verified: the
+  wave-channel ledger stays ≥ 0).
+
+| configuration | no stop | with the local stop |
+|---|--:|--:|
+| all present | 4.14 mm | 1.91 mm |
+| − tissue | 2.14 mm | 1.25 mm |
+| − drift term λ | 2.62 mm | 1.19 mm |
+| − damping ×0.5 | 9.72 mm | 2.65 mm |
+| − damping ×0.3 | 28.86 mm | **2.75 mm** |
+| − tissue − λ | 3.33 mm | 1.17 mm |
+
+The point is not the mean, it is that the **spread collapses from 2.1–28.9 mm to 1.2–2.8 mm**: the bound
+no longer depends on which term survives. It sits at roughly 2× the declared margin, and the excess is the
+stopping distance — itself a plant property, so it belongs in the margin calculation. And the task still
+reaches 50.8 mm of its 55 mm target, so this is not #56's zero-fill corner (safe and useless).
+
+**Now #57's failed remedy works.** Gating the drift term on the passivity budget made blind travel worse in
+#57 (4.72 → 6.53 mm). With the replacement in place, the same gate is harmless:
+
+| | worst blind travel |
+|---|--:|
+| budget only (#56) | 4.72 mm |
+| + gate λ (#57's failure) | 6.53 mm |
+| + local stop | 1.91 mm |
+| + local stop + gate λ | **1.68 mm** |
+
+That is R20 tested rather than asserted: **replace first, then you may suppress.**
+
+**What it costs.** Two prices, both of which have to be paid by someone outside the algorithm:
+
+| declared margin | blind travel | time stopped | stops per run |
+|--:|--:|--:|--:|
+| 0.5 mm | 1.51 mm | 56% | 5.2 |
+| 1.0 mm | 1.91 mm | 42% | 3.8 |
+| 2.0 mm | 2.82 mm | 15% | 1.3 |
+| 4.0 mm | 4.59 mm | 12% | 1.0 |
+
+**The declared margin buys the stop rate** — a narrow corridor stops often, a generous one almost never,
+with the same code on the same network. And resumption is the most dangerous moment: releasing immediately
+peaks at 155 mm/s, while a 200 ms ramp brings that to ~90 mm/s and raises the time stopped from 9% to 73%.
+Same shape as #47's breakthrough lunge, same conclusion — the operating point is chosen by the clinical
+constraint. One property came free: the ramp advances only on steps where information actually arrives, so
+a worse link resumes more cautiously.
+
+- Honest scope: the stop holds the arm **where it is**; inside tissue that means stopping while embedded,
+  not retracting to a safe state, and which of those is correct is a clinical decision this does not make.
+  The network threshold is gone but the declared margin and the resume ramp are still choices — they just
+  come from anatomy and actuator limits, so whoever picks them has grounds. The master keeps moving while
+  the follower is held (the operator is a modelled impedance), which is why resumption is violent; a real
+  system also locks or cues the master, and that needs a human in the loop. Finally, the trigger reads
+  β from the energy ledger, so if the ledger is wrong the stop fires at the wrong time — the same kind of
+  dependence #53 flagged when the check shares a sensor with the thing it checks.
+
+![stop when lost](assets/58_stop_when_lost.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1827,6 +1918,7 @@ python scripts/54_closed_loop_needle.py      # closed-loop needle steering: esti
 python scripts/55_correspondence_search.py   # finding correspondences: the aperture problem on a surface
 python scripts/56_jittery_channel.py         # jitter and packet loss: passivity vs the part it never covered
 python scripts/57_bursty_channel.py          # bursty loss + heavy tail: the leak that was also the brake
+python scripts/58_stop_when_lost.py          # stop when the link is lost: replacing an accidental bound
 pytest -q
 ```
 
@@ -1895,6 +1987,7 @@ scripts/
   55_correspondence_search.py   correspondence search under deformation: tangential slide is unobservable
   56_jittery_channel.py         jitter/loss channel: wave-domain passivity ledger, de-jitter buffer, TDPA
   57_bursty_channel.py          bursty loss + Pareto delay tail: playout-buffer sizing, self-limiting holds
+  58_stop_when_lost.py          designed loss-of-link stop: ablate the accidental brake, then replace it
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
