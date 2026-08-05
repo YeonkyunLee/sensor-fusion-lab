@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–55.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–56.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -19,7 +19,7 @@ A robot places a needle-like tool at a target planned in a pre-operative image, 
 structure, on a **rigid phantom**. The chain is: register the phantom to the image → map the plan into
 robot coordinates → solve inverse kinematics → track the trajectory → (optionally) insert into tissue.
 Two extensions are covered separately: the tool may be **teleoperated** by a human over a delayed
-channel (#50), and the anatomy may **deform** between imaging and intervention (#51–#53, #55).
+channel (#50, #56), and the anatomy may **deform** between imaging and intervention (#51–#53, #55).
 
 Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_image_guided_6dof.py`
 (spatial UR5 + real scan), `47_needle_impedance.py` (contact), `49_registration_real_anatomy.py`
@@ -27,7 +27,8 @@ Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_i
 `51_deformable_registration.py` (non-rigid anatomy), `52_probing_the_prior.py` (checking the
 deformation model's assumptions against a sub-surface observation), `53_measurement_changes_it.py`
 (the same check with a non-ideal intraoperative modality), `54_closed_loop_needle.py` (closing the
-open-loop bending compensation), `55_correspondence_search.py` (removing the correspondence assumption).
+open-loop bending compensation), `55_correspondence_search.py` (removing the correspondence assumption),
+`56_jittery_channel.py` (removing the channel's constant-delay assumption).
 
 ## 2. Requirements (verifiable)
 
@@ -49,6 +50,8 @@ open-loop bending compensation), `55_correspondence_search.py` (removing the cor
 | R14 | Results shall be reproducible from the published script | identical output across runs, verified by a test that calls the experiment twice | `test_main_is_reproducible` |
 | R15 | Where a compensation is open-loop, closing it shall be justified by an ablation that separates the measurement's contribution from the rest | the tip measurement adds nothing over a zero-measurement prior policy (0.49 vs 0.50 mm p90); the gain comes from actuation that can act again (0.98 → 0.37 mm) | `test_measurement_contributes_almost_nothing_with_one_shot_flip`, `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_repeated_replanning_is_where_duty_wins` |
 | R16 | Any accuracy claim that assumes known correspondences shall be restated with correspondences actually searched for | ground-truth correspondence 0.54 mm vs nearest-point 1.41 mm (2.6x) on the same deformation and exposure | `test_finding_correspondence_costs_a_real_multiple`, `test_correspondence_error_tracks_the_slide_while_residual_does_not` |
+| R17 | The passivity of the communication channel shall be established under **time-varying** delay and packet loss, and the accounting shall exclude always-dissipative local terms | wave-domain channel energy stays ≥ 0 under ±40 ms jitter and 40% loss with an energy budget; the same run reads +0 on a system-level balance that hides a −0.017 mJ violation | `test_energy_budget_never_lets_the_channel_create_energy`, `test_constant_delay_channel_is_passive`, `test_the_system_level_balance_cannot_see_the_violation` |
+| R18 | A robustness result shall be reported only for a configuration that **completes the task**, and the completion measure shall be reported with it | at #50's drift gain the tool stops at 34.8 mm of a 55 mm target; every channel result is reported with depth reached | `test_exp50_gain_cannot_reach_the_target_so_the_channel_is_barely_excited`, `test_completing_the_task_makes_the_same_jitter_create_far_more_energy` |
 
 ## 3. Hazard analysis
 
@@ -80,17 +83,20 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H21 | Effort goes to the sensor when the limit is the actuator | The estimate is visibly poor, so sensing looks like the problem | S1 | Med | Actuation varied with sensing held fixed; the residual re-attributed by handing the controller the true parameters | `test_duty_cycling_beats_the_flip_policy_with_the_same_sensor`, `test_estimation_is_no_longer_the_bottleneck_under_duty`, `test_sensor_quality_barely_moves_the_duty_result` | Once actuation can act repeatedly, a 10× quieter tip sensor moves p90 by 0.01 mm. The limit is now replanning granularity, saturation and the small-angle model — none of which more sensing fixes. |
 | H22 | The deformation slides along the surface and the surface registration cannot see it | Tangential displacement leaves a smooth surface unchanged, so nearest-point search is blind to it and the residual stays at the noise floor | S3 | High | The normal/tangential split is constructed and measured separately; the correspondence error is reported alongside the residual so the blind component is visible | `test_tangential_slide_does_not_move_a_smooth_surface`, `test_correspondence_error_tracks_the_slide_while_residual_does_not` (0.48 → 1.53 mm correspondence error at a flat 0.92 → 1.17 mm residual) | **Not mitigated by any method tested.** Point-to-plane, landmark anchors and robust kernels all fail; the requirement is non-geometric correspondence (texture, vessel pattern, markers) across the whole exposure, and the benefit is roughly linear in the fraction so partial coverage buys only partial accuracy. |
 | H23 | A wrong correspondence does not look wrong | Nearest-point search maps a displaced observation to a nearby surface point, producing a plausible small displacement from a false match | S2 | High | Outliers injected as observation jumps rather than as large residuals, so the failure is realistic; robust fitting scored against it rather than assumed effective | `test_robust_barely_helps_because_the_outliers_do_not_look_like_outliers` (1.76 → 1.62 mm) | Residual-based rejection has almost nothing to work with. Detecting this needs a consistency check that does not go through the residual — e.g. agreement between independently matched subsets. Not implemented. |
+| H24 | A stability proof is read as covering the whole controller | The wave-variable passivity argument covers the wave transform only; the drift-correction term λ(x_m − x_s) added to fix position offset sits outside it | S1 | High | The channel's stored energy is accounted **in wave coordinates**, where the claim is exact, and the gain is swept so the uncovered term's contribution is visible | `test_completing_the_task_makes_the_same_jitter_create_far_more_energy` (860× more energy created at the gain that finishes the task), `test_the_system_level_balance_cannot_see_the_violation` | The proof stayed true throughout; it simply never covered the part doing the work. Only the wave block is verified passive here — the system including the correction term is not. Clinical systems avoid this by using a separate position channel rather than leaning on this gain. |
+| H25 | A safety limit is verified at the operator's end and read as protecting the patient | The forbidden-zone wall is rendered on the master (which is correct for stability), so the measured penetration describes the surgeon's hand | S3 | High | Penetration reported at **both** ends, plus the tool's lag while the hand is against the wall | `test_the_wall_protects_the_hand_not_the_tool` (master 0.16–0.21 mm, tool 2.2–2.4 mm behind) | In this layout the tool lags, so the wall errs toward over-protection; with the tool leading instead, the same instrumentation would report a safe number while the patient was harmed. The de-jitter buffer makes the lag worse (2.46 mm). Same defect as H4 (FRE ≠ TRE), one layer out. |
+| H26 | A test passes because the configuration cannot exercise the failure | #50's drift gain leaves a steady-state error under tissue load, so the tool stopped 20 mm short of target and the channel was barely excited | S2 | Med | The task-completion check (depth reached) reported next to every channel result; the gain raised until the task completes before drawing conclusions | `test_exp50_gain_cannot_reach_the_target_so_the_channel_is_barely_excited`, `test_the_link_is_oversampled_for_this_task` | ±40 ms jitter and 40% loss looked harmless for four sections before this was noticed. Task completion is now the precondition for reading any robustness result in this chain, alongside H20's ablation requirement. |
 
 ## 4. Traceability summary
 
-- **204 tests, all passing** (`pytest -q`, ~11 min). Every experiment has at least one test; the
-  medical chain (39–55) carries **134** of them, distributed as: kinematics 4, dynamics 3, planar
+- **222 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
+  medical chain (39–56) carries **152** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R16 above each name the tests that verify them; hazards H1–H23 each name the tests
+- Requirements R1–R18 above each name the tests that verify them; hazards H1–H26 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -112,7 +118,16 @@ The dominant residual risks are, in order:
    robust kernels all failed on it, and the benefit of non-geometric correspondence is roughly linear in
    coverage — so every deformation number in #51–#54 should be read as **assuming a capability the system
    does not yet have.**
-2. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
+3. **A guarantee that does not cover the part doing the work** (H24/H26). #56 lifted #50's constant-delay
+   assumption and found the wave channel still passive under ±40 ms jitter and 40% loss — then found that
+   the configuration producing that result **could not finish the task** (34.8 mm of a 55 mm target), so
+   the channel was barely excited. At the gain that completes the task the same jitter created **860×**
+   the energy, all of it through the drift-correction term that sits outside the wave transform and was
+   never covered by the proof. Two lessons carry forward as requirements (R17/R18): account for passivity
+   only over the block the claim covers, and report robustness only for a configuration that completes the
+   task. The corollary is uncomfortable — a passing robustness test is evidence about the test as much as
+   about the system.
+4. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
    at the target, 2.7–10 mm here — and showed it can be recovered to sub-millimetre. But what recovered
    it through a narrow exposure was a *prior* ("the skull holds the scalp outside the window"), not the
    interpolator, and the volumetric physics model was measurably **biased** in a way grid refinement made
@@ -126,13 +141,19 @@ The dominant residual risks are, in order:
    and stays there under every remedy, because at target depth the signal is already below the check's
    own noise. The needle model carries the same shape of risk (small-angle beam, simplified tissue
    channel).
-3. **Everything is simulated below the interface** (H4/H5/H6). The "real" arm is a deliberately
+5. **Everything is simulated below the interface** (H4/H5/H6). The "real" arm is a deliberately
    mismatched simulation without backlash, joint elasticity or gear nonlinearity; force sensing is
    ideal. Stability margins that depend on sensor noise and delay are therefore unverified.
-4. **The human and the channel** (H11/H12). Delay is handled only for a constant one-way delay with a
-   fixed linear operator impedance. Real networks jitter and drop packets, and a real surgeon adapts —
-   closing the operator's visual loop through the same delay destabilised the human loop regardless of
-   architecture (observed while building #50).
+6. **The human, and what the channel model still idealizes** (H11/H12/H25). #56 added jitter, loss and
+   reordering, but its jitter is zero-mean uniform and its loss independent Bernoulli; real networks have
+   a long late tail and bursty loss, and the cancellation that kept the channel passive in #56's §A leans
+   on that symmetry. The receiver policy (keep-newest / discard-stale) is fixed, and a playout receiver
+   would behave differently. The operator still follows a planned trajectory and never slows down in
+   response to jitter, which is probably the largest stabilizer in a real system — closing the operator's
+   visual loop through the same delay destabilised the human loop regardless of architecture (observed
+   while building #50). Separately, the forbidden-zone number is measured at the master; here the tool
+   lags 2.2–2.4 mm behind, so the wall over-protects, but a layout where the tool *leads* would report the
+   same safe number while harming the patient.
 
 ## 6. What would come next in a real V&V effort
 
@@ -151,13 +172,21 @@ The dominant residual risks are, in order:
 - Closed-loop bending compensation with tip tracking (H3).
 - Force-sensor noise/delay model and a passivity argument for the contact controller (H5).
 - Bone-based landmarks where available (H2).
-- Time-domain passivity control for a jittering, lossy channel (H11).
+- ~~Time-domain passivity control for a jittering, lossy channel (H11)~~ — done in #56: an energy budget
+  transmitted as a **cumulative** total restores passivity without the de-jitter buffer's latency (which
+  raised oscillation 0.21 → 1.60 mm), with the attenuator active 5.7% of the time. What remains is bursty
+  loss, a heavy late tail, and a passivity argument for the **whole** controller including the
+  drift-correction term (H24) rather than for the wave block alone.
+- **Safety limits measured where the harm occurs, not where the operator is** (H25). The wall is rendered
+  on the master for good stability reasons; the number it produces describes the hand. A patient-side
+  measure (tool position against the forbidden zone, through whatever tracking exists) is the missing
+  instrument.
 - Software lifecycle artefacts (configuration management, change control, unit-level requirements
   tracing) if this were ever more than a research lab.
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–55
+- Experiments and measured numbers: [README](README.md) §39–56
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)

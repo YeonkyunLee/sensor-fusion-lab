@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-55 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+56 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -60,8 +60,10 @@ impedance control, a flexible needle steered by its own spin → registration on
 MR scan → teleoperation under delay → deformable registration, where the rigid assumption
 finally breaks → probing that assumption with an observation it cannot fake → and making that
 observation honest, since measuring the tissue also moves it → and closing the last open loop in the
-chain, where the answer turned out not to be the sensor → and finally removing the last thing every
-one of those experiments was given for free: the correspondences themselves.**
+chain, where the answer turned out not to be the sensor → removing the last thing every
+one of those experiments was given for free: the correspondences themselves → and lifting the
+teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
+covered the part doing the work.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -118,6 +120,7 @@ one of those experiments was given for free: the correspondences themselves.**
 | 53 | **when measuring changes what you measure** | probe pressure is a bias, so 32× more data does not remove it (its share grows 13% → 31%); with the check made by the same sensor the gate falls 0.73 → 0.61 and no remedy lifts it |
 | 54 | **closed-loop needle steering** (closes #48's open loop) | an ablation shows the tip measurement buys **nothing** — the gain was a better default; switching actuation so you can correct *again* is what works (p90 0.98 → 0.37 mm) |
 | 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **no surface residual**, so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it |
+| 56 | **a jittery, lossy channel** (removes #50's constant delay) | nothing happened — because the configuration could not finish the task; once it could, the same jitter created **860×** the energy, in the drift-correction term the passivity proof never covered |
 
 ## Experiments
 
@@ -1001,7 +1004,7 @@ approximation).
 
 | loop iteration | target error | tracking residual | ‖π̂ − π‖ |
 |--|----------:|----------:|----------:|
-| 0 — nominal model deployed | 45.855 mm | 46.048 mm (**flagged**) | 1.98 |
+| 0 — nominal model deployed | 45.860 mm | 46.048 mm (**flagged**) | 1.98 |
 | 1 — one excitation run identified | 0.007 mm | 0.019 mm | 0.084 |
 | 3 — accumulated logs | **0.003 mm** | 0.026 mm | 0.061 |
 
@@ -1559,6 +1562,109 @@ exposed surface.
 
 ![correspondence search](assets/55_correspondence_search.png)
 
+### 56. A jittery, lossy channel (`scripts/56_jittery_channel.py`)
+Experiment 50 showed wave variables stable out to 200 ms of delay, and the passivity proof behind that
+result assumes the delay is **constant**. Real networks jitter, drop packets and reorder them. This keeps
+#50's plant exactly and changes only the channel.
+
+Passivity is measured where the claim lives — in wave coordinates, where the channel's stored energy is
+exact:
+
+    E_ch(t) = ∫ ½[ u_sent² + w_sent² − u_recv² − w_recv² ] dτ
+
+With constant delay and no loss this is the energy currently on the wire, so it is ≥ 0 by construction.
+Negative means the channel manufactured energy.
+
+**First result: nothing happened.** At #50's settings, ±40 ms of jitter and 40% packet loss left the
+channel effectively passive (violation ~10⁻⁵ mJ) and the oscillation *smaller*, not larger. Three reasons
+are in the channel: a delay increase starves the receiver into replaying a wave (creating energy) but a
+delay decrease makes it discard a stale packet (destroying energy), and for zero-mean jitter the two
+cancel; loss destroys energy *inside* the channel, so it cannot break passivity; and dropping the packet
+rate from 1 kHz to 50 Hz changes nothing measurable either — **1 kHz is what the local control loop
+needs, not what the channel has to carry.** (The hand's felt force is wrong by ~3 N at the puncture
+instant at *every* rate: that is delay, not rate.)
+
+The fourth reason is the one that matters. Under tissue load #50's drift-correction gain leaves a
+steady-state error of |f_e|/(D_S·λ), so **the tool stops at 34.8 mm and never reaches the 55 mm
+target.** The channel was barely being excited. *A test the system cannot fail is not a test.*
+
+Raise the gain until the task completes and the same jitter bites:
+
+| drift gain λ [1/s] | depth reached | energy created by ±20 ms jitter |
+|--:|--:|--:|
+| 3 (exp 50) | 34.7 mm | 0.006 mJ |
+| 6 | 35.8 mm | 0.006 mJ |
+| 24 | 50.8 mm | **4.87 mJ** |
+| 48 | 51.3 mm | 3.37 mJ |
+
+**860× more, from the same channel defect.** Generation scales with signal energy; the flaw was there all
+along and the test could not excite it. And the location was structurally predictable: the drift term
+λ(x_m − x_s) sits **outside the wave transform**, so the passivity proof never covered it. *The proof was
+true the whole time and was not covering the part doing the work.*
+
+That reframes the fix. The textbook answer is a **de-jitter (playout) buffer** — convert jitter into extra
+constant delay, which #50 already priced as cheap. It does restore passivity, and it costs more than the
+latency:
+
+| de-jitter buffer | starved steps | energy created | settled oscillation | master–tool error |
+|--:|--:|--:|--:|--:|
+| 0 ms | 82% | 3.70 mJ | 0.21 mm | 1.95 mm |
+| 20 ms | 6.7% | 0 | 1.15 mm | 2.97 mm |
+| 45 ms | 7.3% | 0 | **1.60 mm** | **3.61 mm** |
+
+**The buffer buys the proof and sells the performance** — because the added latency lands on exactly the
+position loop that the guarantee excludes. Passive and well-behaved are not the same property.
+
+What works instead is to pay only when something is actually missing. Transmit, alongside each wave
+sample, the **cumulative energy** put into the channel; the receiver may hold the last sample but only
+extract what that budget allows, scaling it by β = √(budget/demand):
+
+| on a missing sample | energy created | depth reached | oscillation | attenuator duty |
+|---|--:|--:|--:|--:|
+| hold last (ZOH) | 1.02 mJ | 50.8 mm | 0.22 mm | — |
+| zero-fill | 0 | **9.4 mm** | 1.07 mm | — |
+| energy budget (TDPA) | **0** | 50.8 mm | **0.15 mm** | 5.7% |
+
+Zero-fill is the safe-and-useless corner: the tool never clears the tissue surface. The budget restores
+passivity **without** the buffer's latency and posts the lowest oscillation of the three, with the damper
+on 6% of the time; when the budget dries up it decays toward zero-fill on its own, i.e. it degrades
+safe. **The buffer pays latency continuously, the budget pays only on the event** — the same shape as
+#54's ablation argument.
+
+And loss tolerance turns out to be a property of the *payload*, not the algorithm:
+
+| packet loss | 0% | 10% | 20% | 40% |
+|---|--:|--:|--:|--:|
+| duty / depth, sending cumulative energy | 5.1% / 50.8 mm | 5.3% / 50.8 mm | 5.7% / 50.8 mm | 6.0% / 50.8 mm |
+| duty / depth, sending increments | 95% / 36.3 mm | 96% / 36.5 mm | 96% / 36.3 mm | 96% / 36.4 mm |
+
+A lost increment is gone forever, so the budget reads permanently low and the attenuator never releases.
+A cumulative total is **monotone**, so one received packet restores the entire history. Same algorithm,
+different payload.
+
+Two more results worth keeping:
+
+- **Raising the wave impedance does not help.** b = 10 → 60 leaves the channel active (0.43 mJ), raises
+  the oscillation (0.22 → 1.28 mm) and pays transparency even when nothing is wrong (0.42 → 0.70 N). #53's
+  "a remedy only fixes the error term it aims at", now in the communication layer.
+- **#50 measured the safety number at the wrong end.** With the forbidden-zone wall rendered locally, the
+  master penetrates it by 0.16–0.21 mm regardless of jitter — but while the hand is against the wall the
+  **tool sits 2.2–2.4 mm behind it**, and the buffer makes that worse (2.46 mm). #50's "168× less
+  penetration" is a true statement about the surgeon's hand. Here the tool lags, so the wall errs toward
+  over-protection; in a layout where the tool *leads*, the same instrumentation would report safety while
+  the patient was harmed. **Measure the safety metric where the harm occurs** — #41's FRE ≠ TRE, one layer
+  out.
+
+- Honest scope: jitter is zero-mean uniform and loss is independent Bernoulli; real networks have a long
+  late tail and bursty loss, and the cancellation argument above leans on that symmetry. The receiver is
+  fixed as keep-newest/discard-stale, which is what produces the cancellation — a receiver that plays out
+  everything would compress waves when the delay shrinks. The operator follows a planned trajectory and
+  never slows down in response to jitter, which is probably the largest stabilizer in a real system. And
+  λ = 24 is "the gain that finishes the task" for this plant; clinical systems use a separate position
+  channel or a hybrid architecture rather than pushing this term.
+
+![jittery channel](assets/56_jittery_channel.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1626,6 +1732,7 @@ python scripts/52_probing_the_prior.py       # checking the prior with sub-surfa
 python scripts/53_measurement_changes_it.py  # non-ideal ultrasound: probe pressure, depth noise, outliers
 python scripts/54_closed_loop_needle.py      # closed-loop needle steering: estimate vs control authority
 python scripts/55_correspondence_search.py   # finding correspondences: the aperture problem on a surface
+python scripts/56_jittery_channel.py         # jitter and packet loss: passivity vs the part it never covered
 pytest -q
 ```
 
@@ -1692,6 +1799,7 @@ scripts/
   53_measurement_changes_it.py  non-ideal iUS: probe indentation bias, depth-dependent noise, robust fit
   54_closed_loop_needle.py      closed-loop bevel steering: online curvature ID, ablation, duty cycling
   55_correspondence_search.py   correspondence search under deformation: tangential slide is unobservable
+  56_jittery_channel.py         jitter/loss channel: wave-domain passivity ledger, de-jitter buffer, TDPA
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
