@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-58 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+59 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and finally asking whether stopping is even a safe state, which turned out to need a better model before a better controller.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -123,6 +123,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 56 | **a jittery, lossy channel** (removes #50's constant delay) | nothing happened — because the configuration could not finish the task; once it could, the same jitter created **860×** the energy, in the drift-correction term the passivity proof never covered |
 | 57 | **bursty loss + a heavy delay tail** (removes #56's symmetry) | my prediction was wrong: holding a stale command is **self-limiting**, and the term #56 called a defect is the **brake**. What actually broke is buffer sizing — a playout deadline manufactures loss the network never had (41% at p50) |
 | 58 | **stop when the link is lost** (fixes what #57 exposed) | ablation shows the bound was accidental — blind travel spreads **2.1 → 28.9 mm** depending on which term survives. A local stop triggered by the *declared clinical margin* collapses that to **1.2 → 2.8 mm** and the task still completes; then #57's failed remedy stops being harmful (**R20 verified**) |
+| 59 | **is stopping a safe state?** (#58's two admissions) | both were **model** problems, not control problems: the chain's tissue model has no post-puncture elasticity, so "holding while the patient moves" produces 0.12 N of force swing where a stick-slip grip term produces 1.62 N (**14×**) — you cannot compare policies a model cannot express. And locking the master makes resumption **worse** because it hides the very cue the operator would react to |
 
 ## Experiments
 
@@ -1849,6 +1850,70 @@ a worse link resumes more cautiously.
 
 ![stop when lost](assets/58_stop_when_lost.png)
 
+### 59. Is stopping a safe state? (`scripts/59_what_is_safe_state.py`)
+Experiment 58 closed with two admissions: the stop **holds** rather than retracts, so inside tissue it
+stops while embedded; and nothing happens on the operator's side, which is why resumption peaks at
+155 mm/s. Both look like control questions. **Both turned out to be model questions**, and that is the
+result.
+
+**You cannot compare policies a model cannot express.** Asking "is holding dangerous?" requires the patient
+to move during the stop, so I added periodic tissue motion. Almost nothing changed — because the tissue
+model this chain has used since #47 is *cutting force + friction* with **no post-puncture elasticity**, so
+a tissue moving onto a stationary tool produces no load. The cleanest way to see it is to take the tissue
+model on its own — no channel, no controller — hold the tool at depth and move the surface:
+
+| patient motion | cutting + friction | + stick-slip grip | grip's own share |
+|--:|--:|--:|--:|
+| 2 mm | 0.048 N | 0.648 N | 0.60 N |
+| 5 mm | 0.120 N | **1.620 N** (14×) | 1.50 N |
+| 10 mm | 0.240 N | 1.840 N | 1.60 N |
+| 20 mm | 1.184 N | 1.984 N | 0.80 N |
+
+Adding the standard stick-slip grip term — the tissue holds the shaft elastically until the force exceeds
+a slip limit, so it reduces to the old model whenever the tool is advancing — makes the hazard appear, and
+its share saturates near 2 × the slip limit because the tissue lets go. **"No difference" from a model that
+cannot represent the effect is silence, not a result.**
+
+**Then the answer is a negative anyway.** With the grip term in, retraction does reduce what holding puts
+on the tissue (1.68 → 0.89 N) but costs **3.6×** the blind travel (2.01 → 7.28 mm), because retraction is
+itself motion without information. In this tissue, **holding is right** — and the condition that would flip
+it is explicit: a higher slip limit (tissue that does not let go) or a smaller cutting baseline. **Which
+tissue you are in chooses the policy**, and that number has to come from measurement, not from here.
+
+**On the operator side the sign of the intervention flips.** Locking the master during the stop is the
+obvious move, and it is wrong in *both* operator models:
+
+| operator | master | mismatch at release | peak speed on resume |
+|---|---|--:|--:|
+| fixed impedance (#50–#58) | free | 7.40 mm | 120.1 mm/s |
+| fixed impedance | locked | 4.45 mm | **133.1 mm/s** |
+| + 200 ms reaction | free | 6.18 mm | **68.0 mm/s** |
+| + 200 ms reaction | locked | 3.80 mm | 125.7 mm/s |
+
+The lock reduces the mismatch, as it must, and makes resumption *faster* — because it does not remove the
+operator's intent, it stores it in the hand's spring, and worse, **it hides the very cue the operator would
+react to** (the tool falling behind the hand). What actually helps is letting the operator react: one rule —
+"if the tool lags, stop pushing after a reaction time" — takes the median resume peak from 120 to 68 mm/s.
+Honestly stated, that gain is **not universal**: paired by seed it is a median 25% reduction and 11 of 16
+seeds improve. Comparing medians of two right-skewed distributions overstates a paired effect, which is the
+same mistake #52 had to fix when it swapped detection-at-fixed-false-alarm for AUROC.
+
+So: **an operator-side measure cannot be evaluated with a non-adaptive operator model.** #50 recorded
+"the surgeon is a fixed impedance" as a limitation; here that limitation flips the sign of a conclusion.
+The recommended combination is **hold + a reacting operator** — blind travel 1.80 mm, resume 68 mm/s,
+passivity and task completion unchanged.
+
+- Honest scope: **the §B verdict rests directly on grip parameters that are order-of-magnitude guesses, not
+  measurements** — so the claim is not "holding is right" but "which tissue you are in decides it". The grip
+  is axial 1-DOF where real interaction adds circumferential grip, lateral support and viscoelasticity
+  (relaxation after pressing — still the open item #53 named). Patient motion is a single sinusoid; real
+  respiration is asymmetric with pulsation on top, and a head fixed in a frame moves far less than the 5 mm
+  used here. The reacting operator is *one* rule with a reaction delay; unlike the gain-carrying visual loop
+  #50 discarded it does not destabilise, but it is still a model. Retraction stops at the surface — full
+  withdrawal is a separate clinical decision.
+
+![what is a safe state](assets/59_what_is_safe_state.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1919,6 +1984,7 @@ python scripts/55_correspondence_search.py   # finding correspondences: the aper
 python scripts/56_jittery_channel.py         # jitter and packet loss: passivity vs the part it never covered
 python scripts/57_bursty_channel.py          # bursty loss + heavy tail: the leak that was also the brake
 python scripts/58_stop_when_lost.py          # stop when the link is lost: replacing an accidental bound
+python scripts/59_what_is_safe_state.py      # is stopping safe? the model had to be fixed before asking
 pytest -q
 ```
 
@@ -1988,6 +2054,7 @@ scripts/
   56_jittery_channel.py         jitter/loss channel: wave-domain passivity ledger, de-jitter buffer, TDPA
   57_bursty_channel.py          bursty loss + Pareto delay tail: playout-buffer sizing, self-limiting holds
   58_stop_when_lost.py          designed loss-of-link stop: ablate the accidental brake, then replace it
+  59_what_is_safe_state.py      hold vs retract, and the operator side: model expressiveness first
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–58.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–59.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -30,7 +30,9 @@ deformation model's assumptions against a sub-surface observation), `53_measurem
 open-loop bending compensation), `55_correspondence_search.py` (removing the correspondence assumption),
 `56_jittery_channel.py` (removing the channel's constant-delay assumption),
 `57_bursty_channel.py` (removing that channel's jitter symmetry: bursty loss and a heavy delay tail),
-`58_stop_when_lost.py` (designing the loss-of-link stop that #57 showed was missing).
+`58_stop_when_lost.py` (designing the loss-of-link stop that #57 showed was missing),
+`59_what_is_safe_state.py` (asking whether that stop is a safe state, and finding the question needed a
+tissue model that can express the hazard and an operator model that can adapt).
 
 ## 2. Requirements (verifiable)
 
@@ -57,6 +59,8 @@ open-loop bending compensation), `55_correspondence_search.py` (removing the cor
 | R19 | When a stressor's **shape** is varied, its first moments (mean delay, mean loss rate) shall be held fixed, and the metric used shall be one the effect can appear in | burst length varied 1→80 at a fixed 10% loss and a matched mean one-way delay; max drawdown orders the conditions (30.9 → 54.2 mJ) where `E_min` does not | `test_gilbert_elliott_holds_the_average_loss_rate_across_burst_lengths`, `test_matching_the_mean_delay_is_what_makes_the_comparison_fair`, `test_e_min_cannot_rank_the_conditions_but_drawdown_can` |
 | R20 | Before a term that lies outside a guarantee is removed or suppressed, the safety function it is performing shall be identified and replaced | gating the drift term on the passivity budget raises worst blind tool travel 4.72 → 6.53 mm; with the replacement stop in place the same gate is harmless (1.91 → 1.68 mm) | `test_gating_the_drift_term_makes_blind_travel_worse`, `test_holding_a_stale_command_is_self_limiting`, `test_once_the_brake_is_replaced_gating_no_longer_hurts` |
 | R21 | On loss of communication the follower shall stop by an explicit mechanism whose trigger comes from the **declared clinical margin** and whose enforcement is **local**, and the resulting bound shall not depend on which incidental plant property survives | without a stop, worst blind travel spreads 2.14–28.86 mm across ablations of tissue resistance, drift term and damping; with it, 1.17–2.75 mm at ~2× the declared margin, the task still reaching 50.8 mm of 55 mm | `test_the_stop_collapses_the_spread_across_ablations`, `test_the_stop_bounds_blind_travel_near_the_declared_margin`, `test_the_stop_does_not_degrade_into_safe_but_useless`, `test_the_stop_is_local_and_stays_passive` |
+| R22 | Before two safety policies are compared, the model shall be shown to **express the hazard** that distinguishes them | with the chain's cutting+friction tissue, holding the tool while the patient moves 5 mm produces 0.12 N of force swing; adding a stick-slip grip term produces 1.62 N (14×) with the grip's share saturating near 2× the slip limit | `test_the_old_tissue_model_cannot_express_holding_while_the_patient_moves`, `test_the_grip_contribution_saturates_at_the_slip_limit`, `test_the_grip_term_reduces_to_the_old_model_while_advancing` |
+| R23 | A measure acting on the operator shall be evaluated against an operator model that can **adapt**, and the measure shall not remove the cue the operator needs | locking the master lowers mismatch 7.40 → 4.45 mm yet raises the resume peak 120.1 → 133.1 mm/s in both operator models; a reaction rule instead takes the median peak to 68.0 mm/s (paired: median 25% reduction, 11/16 seeds) | `test_locking_the_master_makes_resumption_worse_in_both_operator_models`, `test_a_reacting_operator_is_what_actually_reduces_the_lunge`, `test_the_reaction_rule_does_not_destabilise_the_human_loop` |
 
 ## 3. Hazard analysis
 
@@ -93,18 +97,21 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H26 | A test passes because the configuration cannot exercise the failure | #50's drift gain leaves a steady-state error under tissue load, so the tool stopped 20 mm short of target and the channel was barely excited | S2 | Med | The task-completion check (depth reached) reported next to every channel result; the gain raised until the task completes before drawing conclusions | `test_exp50_gain_cannot_reach_the_target_so_the_channel_is_barely_excited`, `test_the_link_is_oversampled_for_this_task` | ±40 ms jitter and 40% loss looked harmless for four sections before this was noticed. Task completion is now the precondition for reading any robustness result in this chain, alongside H20's ablation requirement. |
 | H27 | A mitigation is removed together with a defect it happens to share a mechanism with | The drift-correction term is identified (H24) as the uncovered passivity leak, so suppressing it looks like the fix; it is also the position servo that halts the tool during a blackout | S3 | High | Blind tool travel measured for hold-last, energy budget, and budget-with-the-drift-term-gated; the "obvious fix" is scored rather than assumed | `test_gating_the_drift_term_makes_blind_travel_worse` (4.72 → 6.53 mm at a 160 ms mean burst), `test_holding_a_stale_command_is_self_limiting` | **Resolved in #58** by building the replacement (R21) and then re-running the suppression: with a local loss-of-link stop in place the same gate is harmless (1.91 → 1.68 mm). What remains is that the stop *holds* rather than retracts, and that the master keeps moving while the follower is held. |
 | H28 | A playout buffer sized for a bounded jitter is carried over to a heavy-tailed one | A Pareto delay tail has no maximum, so a playout deadline discards the tail instead of absorbing it — converting delay into loss the network never had | S2 | High | Buffer swept by delay quantile with late-drop rate, standing latency and oscillation reported together; energy metrics deliberately excluded because they are not comparable across different mean delays | `test_an_undersized_playout_buffer_turns_delay_into_loss` (41% late drops on a 5%-loss link at a p50 buffer), `test_a_large_buffer_buys_passivity_with_latency_that_costs_oscillation` | No sufficient buffer exists. The delay↔loss↔oscillation exchange rate has to be set from outside the system by the latency the procedure tolerates; this repo does not have that number. |
-| H29 | A safety bound is inherited from an incidental plant property and read as designed | Holding a stale command is self-limiting only because this axis is heavy, well damped and pushing into resisting tissue; the bound was never specified anywhere | S3 | High | The contributors ablated one at a time (tissue resistance, drift term, damping) and the bound re-measured; then an explicit stop added whose trigger is the **declared clinical margin** and whose enforcement is **local** (no packet needed, dissipative toward a fixed point) | `test_the_bound_without_a_stop_depends_on_which_term_survives` (2.14 → 28.86 mm across ablations), `test_self_limiting_weakens_when_the_damping_is_cut`, `test_the_stop_collapses_the_spread_across_ablations` (to 1.17–2.75 mm) | The bound is now specified rather than inherited, and two design choices remain — the declared margin, which buys the stop rate (56% of the time stopped at 0.5 mm, 12% at 4.0 mm), and the resume ramp (155 → ~90 mm/s peak against 9% → 73% time stopped). Both come from anatomy and actuator limits rather than from the network, so whoever picks them has grounds; this repo does not have those numbers. The stop also **holds rather than retracts**, which inside tissue is a clinical decision not made here. |
+| H29 | A safety bound is inherited from an incidental plant property and read as designed | Holding a stale command is self-limiting only because this axis is heavy, well damped and pushing into resisting tissue; the bound was never specified anywhere | S3 | High | The contributors ablated one at a time (tissue resistance, drift term, damping) and the bound re-measured; then an explicit stop added whose trigger is the **declared clinical margin** and whose enforcement is **local** (no packet needed, dissipative toward a fixed point) | `test_the_bound_without_a_stop_depends_on_which_term_survives` (2.14 → 28.86 mm across ablations), `test_self_limiting_weakens_when_the_damping_is_cut`, `test_the_stop_collapses_the_spread_across_ablations` (to 1.17–2.75 mm) | The bound is now specified rather than inherited (and #59 later showed the *hold-versus-retract* question behind it could not even be posed with the chain's tissue model — H30), and two design choices remain — the declared margin, which buys the stop rate (56% of the time stopped at 0.5 mm, 12% at 4.0 mm), and the resume ramp (155 → ~90 mm/s peak against 9% → 73% time stopped). Both come from anatomy and actuator limits rather than from the network, so whoever picks them has grounds; this repo does not have those numbers. The stop also **holds rather than retracts**, which inside tissue is a clinical decision not made here. |
+
+| H30 | Two safety policies are compared in a model that cannot express the hazard separating them, and "no difference" is read as a result | The chain's tissue model (cutting force + friction since #47) has no post-puncture elasticity, so a tissue moving onto a held tool produces no load | S3 | High | The tissue model tested **on its own** (no channel, no controller): hold the tool at depth, move the surface, measure the force swing. Then the standard stick-slip grip term added, which reduces to the old model whenever the tool advances | `test_the_old_tissue_model_cannot_express_holding_while_the_patient_moves` (0.12 → 1.62 N swing, 14×), `test_no_patient_motion_means_no_swing_in_either_model`, `test_the_grip_term_reduces_to_the_old_model_while_advancing` | With the hazard expressible, retraction does lower the load (1.68 → 0.89 N) but costs 3.6× the blind travel, so **holding is right in this tissue** — and the flip condition is explicit (higher slip limit, or smaller cutting baseline). The grip parameters are order-of-magnitude guesses, so the verdict is "which tissue you are in decides it", not "holding is right". Viscoelastic relaxation (H17's open item) is still absent. |
+| H31 | A measure aimed at the operator removes the cue the operator needs | Locking the master during a stop suppresses the growing hand-to-tool mismatch, which is exactly the signal a surgeon would react to; and with a non-adaptive operator model the intent is stored in the hand rather than removed | S2 | High | Both operator models scored side by side (fixed impedance and a reaction rule with a human reaction delay), master free versus locked, reporting mismatch **and** resume peak | `test_locking_the_master_makes_resumption_worse_in_both_operator_models` (120.1 → 133.1 mm/s while mismatch falls 7.40 → 4.45 mm), `test_a_reacting_operator_is_what_actually_reduces_the_lunge` (paired median 25%, 11/16 seeds), `test_the_reaction_rule_does_not_destabilise_the_human_loop` | The operator remains a model: one reaction rule, no force perception, no learning, no reversal. #50 recorded that as a limitation; here it **flips the sign** of a conclusion, so any future operator-side claim in this repo needs an adaptive operator. The gain is also not universal — 5 of 16 seeds get worse. |
 
 ## 4. Traceability summary
 
-- **252 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
-  medical chain (39–58) carries **182** of them, distributed as: kinematics 4, dynamics 3, planar
+- **265 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
+  medical chain (39–59) carries **195** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15, safe-state question 13. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R21 above each name the tests that verify them; hazards H1–H29 each name the tests
+- Requirements R1–R23 above each name the tests that verify them; hazards H1–H31 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -147,6 +154,11 @@ The dominant residual risks are, in order:
    that moved the furthest, and the rule it produced (R20/R21) is the most portable thing in this document:
    **an out-of-guarantee term may be doing safety work; replace before you suppress.** What is still open
    is that the stop holds rather than retracts, and that the master keeps moving while the follower is held.
+   #59 took both of those on and found **neither was a control question** (H30/H31): the chain's tissue
+   model cannot express "holding while the patient moves" at all (0.12 versus 1.62 N of force swing once a
+   stick-slip grip term is added), and locking the master makes resumption *worse* because it hides the cue
+   the operator would react to. So the residual risk here is now explicitly a **measurement** gap — the grip
+   parameters and an adaptive operator — rather than a missing controller.
 5. **No sufficient playout buffer on a heavy-tailed link** (H28). A Pareto tail has no maximum, so #56's
    "buy 45 ms and be done" does not carry over: imposing a playout deadline **manufactures loss the network
    never had** (41% late drops on a 5%-loss link at a p50 buffer, where an undersized buffer is dominated on
@@ -209,9 +221,16 @@ The dominant residual risks are, in order:
   trigger is the **declared clinical margin** (travel accumulated with no fresh sample) rather than a
   network threshold, and enforcement is **local** so it works with the link dead. It collapses the bound's
   dependence on incidental plant properties (2.14–28.86 → 1.17–2.75 mm) and makes suppressing the
-  drift term harmless. What remains: the stop **holds rather than retracts** (a clinical decision), and
-  nothing happens on the operator's side — the master keeps moving while the follower is held, which is
-  why resumption peaks at 155 mm/s. Locking or cueing the master needs a human in the loop.
+  drift term harmless. ~~Whether holding is the right safe state, and what to do on the operator side~~
+  was then asked in #59 and turned out to be blocked by two model gaps (H30/H31), both minimally closed
+  there. What remains from that line is listed below as the measurements this repo does not have.
+- **A tissue model good enough to decide hold-versus-retract** (H30). #59's verdict rests on grip
+  parameters that are order-of-magnitude guesses; the flip condition (slip limit versus cutting baseline)
+  is explicit, so the missing input is a measured needle–tissue interaction for the tissue in question,
+  plus the viscoelastic relaxation H17 first named.
+- **An operator model that adapts** (H31). One reaction rule was enough to flip the sign of the
+  master-locking conclusion. Force perception, learning and reversal are all still absent, and any future
+  operator-side claim needs them.
 - **Safety limits measured where the harm occurs, not where the operator is** (H25). The wall is rendered
   on the master for good stability reasons; the number it produces describes the hand. A patient-side
   measure (tool position against the forbidden zone, through whatever tracking exists) is the missing
@@ -225,7 +244,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–58
+- Experiments and measured numbers: [README](README.md) §39–59
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)

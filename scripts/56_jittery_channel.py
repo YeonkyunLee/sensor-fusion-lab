@@ -167,8 +167,10 @@ class Channel:
 def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         b_wave=None, vf_stiffness=0.0, steps=STEPS, energy_mode="cumulative",
         lam_pos=None, buf_ms=0.0, rate_hz=None, chan=None, lam_gate=False,
-        tissue_on=True, b_scale=1.0, estop=False, resume_ms=0.0, blind_mm=1.0):
-    """한 조건 시뮬레이션. exp 56·57·58 이 공유하는 1-DOF 원격조작 시뮬레이터다.
+        tissue_on=True, b_scale=1.0, estop=False, resume_ms=0.0, blind_mm=1.0,
+        retract_mm=0.0, master_lock=False, breath_mm=0.0, breath_hz=0.25,
+        tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0):
+    """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
       'zoh'  — 파동변수 + 굶으면 마지막 값 유지 (표준 구현)
@@ -197,6 +199,22 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                        β=0 자체를 트리거로 쓰면 지터가 방향별 80% 를 굶기는 채널에서 너무
                        자주 걸린다 — 처음에 그렇게 짰다가 정지가 98.5% 걸려 과제를 못 했다.
       resume_ms      — 정지 해제 시 원래 명령으로 되돌아가는 시간. 0 이면 즉시 복귀(돌진 위험).
+
+    exp 59 가 쓰는 손잡이 — exp 58 이 남긴 두 자백("정지는 붙드는 것이지 후퇴가 아니다", "술자 쪽은
+    그대로다")을 시험하기 위한 것들이다:
+      breath_mm/hz   — **환자 움직임**. 조직 표면이 주기적으로 움직인다. 정지 중에는 도구가 고정된
+                       장애물이 되므로 이 움직임이 곧 상대 침투가 된다 — "붙들고 있는 것이 정말
+                       안전 상태인가"를 물을 수 있게 만드는 유일한 항이다(없으면 질문 자체가 없다).
+      retract_mm     — 정지 시 붙드는 대신 이만큼 **후퇴**한다. 후퇴 자체가 '정보 없이 하는 움직임'
+                       이라 공짜가 아니다 — 그 교환비가 exp 59 의 A 절이다.
+      master_lock    — 정지 중 마스터를 **국소적으로** 제동한다(채널 불필요). 안 하면 술자는 계속
+                       움직이고 그 어긋남이 복귀 돌진이 된다.
+      tissue_obj     — 조직 모델 주입. 기본은 exp 47/50 의 절삭+마찰 모델인데, 그 모델은 관통 후
+                       **탄성이 없어서** 도구를 붙들고 있는 동안 환자가 움직여도 힘이 쌓이지 않는다.
+                       exp 59 가 stick-slip 파악 항을 넣은 모델을 여기로 끼운다.
+      op_react_ms    — 술자의 반응. 0 이면 exp 50 이후 내내 쓴 **비적응** 술자(계획 궤적을 향한 고정
+                       임피던스)다. >0 이면 "도구가 응답하지 않으면 손을 멈춘다"는 규칙이 붙는다 —
+                       비적응 술자로는 마스터 제동을 평가할 수 없다(의도가 손 스프링에 저장된다).
     """
     rng = np.random.default_rng(20250805 + 1000 * seed)
     b = (B_WAVE_BIG if mode == "bigb" else (B_WAVE if b_wave is None else b_wave))
@@ -212,7 +230,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     make = Channel if chan is None else chan
     ch_ms = make(rng, delay_ms, jitter_ms, loss, zero=zero)       # 마스터 → 팔
     ch_sm = make(rng, delay_ms, jitter_ms, loss, zero=zero)       # 팔 → 마스터
-    tissue = tele.Tissue()
+    tissue = tele.Tissue() if tissue_obj is None else tissue_obj
     sq = np.sqrt(2 * b)
 
     xm = xs = vm = vs = 0.0
@@ -237,9 +255,18 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     resume_win = 0                   # 해제 직후 관찰 창 [스텝]
 
     punct_k = None
+    surf = 0.0
+    xm_hold = 0.0
+    f_e_held_max = depth_held_max = mismatch_release = 0.0
+    df_held_max = f_e_at_stop = 0.0
+    op_seen, op_still, op_frozen = 0.0, 0, None   # 적응형 술자 상태(op_react_ms > 0)
+    xs_rx = 0.0                                    # 술자가 화면으로 보는 팔 위치(지연된 값)
     for k in range(steps):
         t = k * DT
-        f_e = tissue.force(xs) if tissue_on else 0.0
+        # 환자 움직임: 조직 표면이 움직인다. 상대 침투가 xs − surf − X_SURFACE 가 되므로, 도구를
+        # 붙들고 있으면 표면이 다가오는 만큼 그대로 더 박힌다.
+        surf = breath_mm * 1e-3 * np.sin(2 * np.pi * breath_hz * t) if breath_mm else 0.0
+        f_e = tissue.force(xs - surf) if tissue_on else 0.0
         if tissue.punctured and punct_k is None:
             punct_k = k
         do_send = (k % n_step == 0)
@@ -334,11 +361,25 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 if dry:
                     blind_acc += abs(vs) * DT
                     if blind_acc > blind_limit:
-                        stopped, x_hold, blend = True, xs, 0.0
+                        # 붙들 목표. retract_mm 이 있으면 그만큼 뒤로 물러난 지점을 목표로 한다
+                        # (조직 안에서만 후퇴하고 표면보다 얕게는 가지 않는다 — 도구를 완전히 빼는
+                        #  것은 별개의 결정이다). retract_mm=0 이면 **정확히 지금 위치**를 붙든다:
+                        # 자유공간에서도 표면으로 클램프하면 목표가 앞으로 밀린다(처음에 그랬다).
+                        stopped, blend = True, 0.0
+                        x_hold = xs
+                        if retract_mm > 0.0:
+                            x_hold = max(xs - retract_mm * 1e-3, X_SURFACE + surf)
+                        xm_hold = xm
+                        f_e_at_stop = abs(f_e)   # 정지 시점의 조직력(절삭 기저)
                         n_estop += 1
                 else:
                     blind_acc = 0.0
             if stopped:
+                f_e_held_max = max(f_e_held_max, abs(f_e))
+                # **증분**이 실제로 붙들기가 조직에 더 얹은 몫이다. 절삭 기저(2~3 N)는 어느 정책에서든
+                # 있으므로 총합으로 보면 파악 항의 ≤0.8 N 이 잡음에 묻힌다 — 처음에 그랬다.
+                df_held_max = max(df_held_max, abs(f_e) - f_e_at_stop)
+                depth_held_max = max(depth_held_max, xs - surf - X_SURFACE)
                 # 램프는 **정보가 실제로 오는 스텝에서만** 올라간다. 굶은 스텝에서는 리셋하지 않고
                 # 그대로 멈춰 둔다 — 연속 fresh 를 요구하면 지터 채널에서 영구히 래치된다(처음에
                 # 그렇게 짰다가 정지가 85% 걸려 도구가 12 mm 에서 멈췄다). 부수적으로 좋은 성질이
@@ -346,6 +387,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 if not dry:
                     blend += DT / max(resume_ms * 1e-3, DT)
                     if blend >= 1.0:
+                        mismatch_release = max(mismatch_release, abs(xm - xs))
                         stopped, blend, blind_acc = False, 1.0, 0.0
                         resume_win = 100                          # 복귀 후 100 ms 를 관찰한다
                 wgt = min(max(blend, 0.0), 1.0)
@@ -370,9 +412,33 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         if vf_stiffness > 0.0 and xm > X_WALL:
             f_vf = -vf_stiffness * (xm - X_WALL) - 0.05 * np.sqrt(vf_stiffness) * vm
 
-        f_h = K_OP * (tele.operator_target(t) - xm) - D_OP * vm
+        # ---- 술자 ----
+        # op_react_ms > 0 이면 "도구가 응답하지 않으면 손을 멈춘다". exp 50 은 시각 폐루프를 **이득
+        # 있는 루프**로 걸었다가 사람 루프 자체가 발산해서 폐기했는데, 이건 이득이 아니라 **목표를
+        # 그 자리에 얼려두는** 규칙이라 발산하지 않는다. 반응 지연은 사람의 반응시간이다.
+        tgt = tele.operator_target(t)
+        if op_react_ms > 0.0:
+            # 판정 기준은 **술자가 실제로 보는 양**이다: 화면의 도구가 손보다 얼마나 뒤처졌는가.
+            # 처음엔 "도구가 안 움직이면"으로 짰는데, 붙들려 있는 동안에도 팔이 기어가서(스프링-댐퍼
+            # 유지라 완전 정지가 아니다) 판정이 계속 리셋돼 규칙이 아예 안 걸렸다.
+            if abs(xm - xs_rx) > op_lag_mm * 1e-3:
+                op_still += 1
+            else:
+                op_still, op_frozen = 0, None
+            if op_still * DT * 1e3 > op_react_ms:
+                if op_frozen is None:
+                    op_frozen = tgt                       # 목표를 그 자리에 얼린다(손을 멈춘다)
+                tgt = op_frozen
+        f_h = K_OP * (tgt - xm) - D_OP * vm
 
-        am = (f_h + f_m_ch + f_vf - B_M * vm) / M_M
+        # ---- 정지 중 마스터 제동 (exp 59) ----
+        # 팔만 멈추면 술자는 계속 움직이고 그 어긋남이 복귀 돌진이 된다. 제동도 **국소**로 한다 —
+        # 마스터가 자기 위치를 붙드는 것이므로 채널이 죽어도 동작한다(exp 50 의 로컬 렌더링 원칙).
+        f_ml = 0.0
+        if master_lock and estop and stopped:
+            f_ml = K_HOLD * (xm_hold - xm) - D_HOLD * vm
+
+        am = (f_h + f_m_ch + f_vf + f_ml - B_M * vm) / M_M
         a_s = (f_coup + f_loc + f_e - B_S * vs) / M_S
         vm += am * DT
         vs += a_s * DT
@@ -402,6 +468,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                n_late=ch_ms.n_late + ch_sm.n_late,
                n_estop=n_estop, held_frac=n_held / max(len(log["t"]), 1),
                resume_vmax_mms=resume_vmax * 1e3,
+               f_e_held_max=f_e_held_max, df_held_max=df_held_max,
+               mismatch_release_mm=mismatch_release * 1e3,
+               depth_held_max_mm=depth_held_max * 1e3,
                waste_frac=(ch_ms.n_stale + ch_sm.n_stale + ch_ms.n_late
                            + ch_sm.n_late) / max(ch_ms.n_sent + ch_sm.n_sent, 1),
                att_duty=n_att / max(n, 1),
