@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-56 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+57 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -121,6 +121,7 @@ covered the part doing the work.**
 | 54 | **closed-loop needle steering** (closes #48's open loop) | an ablation shows the tip measurement buys **nothing** — the gain was a better default; switching actuation so you can correct *again* is what works (p90 0.98 → 0.37 mm) |
 | 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **no surface residual**, so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it |
 | 56 | **a jittery, lossy channel** (removes #50's constant delay) | nothing happened — because the configuration could not finish the task; once it could, the same jitter created **860×** the energy, in the drift-correction term the passivity proof never covered |
+| 57 | **bursty loss + a heavy delay tail** (removes #56's symmetry) | my prediction was wrong: holding a stale command is **self-limiting**, and the term #56 called a defect is the **brake**. What actually broke is buffer sizing — a playout deadline manufactures loss the network never had (41% at p50) |
 
 ## Experiments
 
@@ -1665,6 +1666,98 @@ Two more results worth keeping:
 
 ![jittery channel](assets/56_jittery_channel.png)
 
+### 57. Bursty loss and a heavy delay tail (`scripts/57_bursty_channel.py`)
+Experiment 56 explained its own null result: jitter that *increases* the delay starves the receiver into
+replaying a wave (creating energy), a *decrease* makes it discard a stale packet (destroying energy), and
+for zero-mean jitter the two cancel. Its limits block flagged that this leans on the symmetry. Closing
+#56, I predicted that removing the symmetry would shrink its conclusion.
+
+**The prediction was wrong**, and finding out why was worth more than the prediction. Same plant, same
+controller, same ledger — only the channel changes: delay is nominal + a Pareto tail (α = 1.8, so the
+variance is infinite and there is no maximum), and loss follows a Gilbert–Elliott two-state model so
+burstiness can be varied at a **fixed** average loss rate. Both comparisons are made at a **matched mean
+one-way delay** (the tail's mean is subtracted from the nominal), because otherwise you measure added
+latency rather than shape — the same trap #55 hit when two deformation fields disagreed.
+
+**What the metrics can and cannot see.** Four conditions at matched mean delay and matched loss rate:
+
+| condition | E_min | max drawdown | longest outage | worst blind travel |
+|---|--:|--:|--:|--:|
+| #56's condition (uniform ±20 ms, independent 10%) | −1.89 mJ | 30.9 mJ | 235 ms | 11.30 mm |
+| heavy tail only (no loss) | −0.87 mJ | 32.2 mJ | 30 ms | 2.18 mm |
+| bursty loss only (10%, L = 40) | −1.94 mJ | 41.7 mJ | 171 ms | 3.66 mm |
+| heavy tail + bursty loss | −23.2 mJ | **54.2 mJ** | 175 ms | 4.26 mm |
+
+Only the **max drawdown** orders these by severity. `E_min` is masked by the energy sitting in the pipe,
+and the outage/blind-travel columns are largest for #56's *jitter* condition — not because it blacks out
+longer but because ±20 ms of jitter already starves ~80% of steps per direction and a step is only whole
+when **both** directions deliver. Those two columns are counting jitter's dense small holes, not
+blackouts. (#52/#53's max-versus-RMS problem, again: you have to pick a metric that can see the thing
+you want to claim.)
+
+**Clumping at a fixed loss rate does almost nothing — and the reason is the plant.** Sweeping mean burst
+length from 1 to 80 samples at a fixed 10% loss, the longest outage grows 4 → 351 ms by construction, but
+total blind tool travel *falls* (17.5 → 6.6 mm) and neither energy measure trends. Holding a stale
+command turns out to be **self-limiting**: the stale command has an equilibrium, so the follower converges
+to it and stops. Measuring travel per starved step by age within the hold:
+
+| mean burst L | first 5 steps of a hold | beyond 60 steps |
+|--:|--:|--:|
+| 10 | 22.8 µm | 3.0 µm |
+| 40 | 20.5 µm | 6.7 µm |
+| 80 | 16.2 µm | 4.9 µm |
+
+Past ~60 ms of holding the tool crawls at a third of its initial speed, so the worst single episode
+saturates instead of growing with the blackout.
+
+**And the term that provides that brake is the one #56 called a defect.** The energy budget governs only
+the wave channel, so it does not stop the tool; what actually holds the follower is the drift correction
+λ(x_m − x_s), a position servo toward a stale but *bounded* setpoint. Gating that term on the same budget
+signal — the obvious fix — makes things **worse**:
+
+| mean burst | hold last | energy budget | budget + gating the drift term |
+|--:|--:|--:|--:|
+| 10 ms | 4.32 mm | 3.22 mm | 3.64 mm |
+| 40 ms | 4.26 mm | 3.36 mm | 4.17 mm |
+| 160 ms | 4.14 mm | 4.72 mm | **6.53 mm** |
+
+So #56's H24 was half right. **The same term breaks the passivity guarantee and does safety work the
+guaranteed part does not.** The rule that follows is not "remove what the proof does not cover" but
+"replace what it is silently doing first." A real "stop when communication is lost" function is still
+missing here; budget exhaustion supplies the *decision instant* without a tuned threshold, but it does not
+enforce the stop.
+
+**What actually broke is buffer sizing.** #56 could say "buy 45 ms of playout buffer and be done" because
+uniform jitter has a maximum. A Pareto tail has none, so the buffer becomes a quantile choice — and
+imposing a playout deadline **manufactures loss the network never had**:
+
+| buffer | effective one-way delay | delay turned into loss | oscillation |
+|---|--:|--:|--:|
+| none | 50 ms | 0% | 0.30 mm |
+| p50 (9 ms) | 59 ms | **41%** | 0.38 mm |
+| p90 (22 ms) | 72 ms | 8.8% | 0.63 mm |
+| p99 (77 ms) | 127 ms | 0.9% | 1.54 mm |
+| p99.9 (278 ms) | 328 ms | 0.1% | **1.90 mm** |
+
+An undersized buffer is dominated — it pays latency *and* converts 41% of a 5%-loss link into drops,
+buying nothing. A large one removes the drops and pays 328 ms of standing latency, which lands on the
+same uncovered position loop #56 identified (oscillation 0.30 → 1.90 mm). There is no sufficient buffer;
+the trade-off has to be resolved from outside the system, by what latency the procedure tolerates.
+
+Two smaller results: the energy budget still restores passivity under bursts (duty 5.3% → 7.7%, of which
+6.3% is effectively muted), so #56's "nearly free" mostly survives but was measured on independent loss;
+and zero-fill collapses further under bursts (depth 22.0 mm of a 55 mm target).
+
+- Honest scope: the self-limiting behaviour is a property of **this** plant — a heavy, well-damped axis
+  pushing into resisting tissue. On a light, low-friction axis (the needle spin that made #47's impedance
+  controller diverge) a stale hold need not be self-limiting, so this must not be generalised across axes.
+  Gilbert–Elliott is a two-state geometric model where real wireless/WAN loss is self-similar with longer
+  correlation; the two directions are independent here where in reality they share a path and congest
+  together. And long bursts mean few events: a 4 s run holds only 5–6 bursts at L = 80, so the realised
+  loss rate swings 7–13% and the self-limiting ratio varies 1.7–3.3× across seeds.
+
+![bursty channel](assets/57_bursty_channel.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1733,6 +1826,7 @@ python scripts/53_measurement_changes_it.py  # non-ideal ultrasound: probe press
 python scripts/54_closed_loop_needle.py      # closed-loop needle steering: estimate vs control authority
 python scripts/55_correspondence_search.py   # finding correspondences: the aperture problem on a surface
 python scripts/56_jittery_channel.py         # jitter and packet loss: passivity vs the part it never covered
+python scripts/57_bursty_channel.py          # bursty loss + heavy tail: the leak that was also the brake
 pytest -q
 ```
 
@@ -1800,6 +1894,7 @@ scripts/
   54_closed_loop_needle.py      closed-loop bevel steering: online curvature ID, ablation, duty cycling
   55_correspondence_search.py   correspondence search under deformation: tangential slide is unobservable
   56_jittery_channel.py         jitter/loss channel: wave-domain passivity ledger, de-jitter buffer, TDPA
+  57_bursty_channel.py          bursty loss + Pareto delay tail: playout-buffer sizing, self-limiting holds
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

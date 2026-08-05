@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–56.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–57.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -19,7 +19,7 @@ A robot places a needle-like tool at a target planned in a pre-operative image, 
 structure, on a **rigid phantom**. The chain is: register the phantom to the image → map the plan into
 robot coordinates → solve inverse kinematics → track the trajectory → (optionally) insert into tissue.
 Two extensions are covered separately: the tool may be **teleoperated** by a human over a delayed
-channel (#50, #56), and the anatomy may **deform** between imaging and intervention (#51–#53, #55).
+channel (#50, #56, #57), and the anatomy may **deform** between imaging and intervention (#51–#53, #55).
 
 Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_image_guided_6dof.py`
 (spatial UR5 + real scan), `47_needle_impedance.py` (contact), `49_registration_real_anatomy.py`
@@ -28,7 +28,8 @@ Reference implementation: `scripts/42_image_guided_targeting.py` (planar), `45_i
 deformation model's assumptions against a sub-surface observation), `53_measurement_changes_it.py`
 (the same check with a non-ideal intraoperative modality), `54_closed_loop_needle.py` (closing the
 open-loop bending compensation), `55_correspondence_search.py` (removing the correspondence assumption),
-`56_jittery_channel.py` (removing the channel's constant-delay assumption).
+`56_jittery_channel.py` (removing the channel's constant-delay assumption),
+`57_bursty_channel.py` (removing that channel's jitter symmetry: bursty loss and a heavy delay tail).
 
 ## 2. Requirements (verifiable)
 
@@ -52,6 +53,8 @@ open-loop bending compensation), `55_correspondence_search.py` (removing the cor
 | R16 | Any accuracy claim that assumes known correspondences shall be restated with correspondences actually searched for | ground-truth correspondence 0.54 mm vs nearest-point 1.41 mm (2.6x) on the same deformation and exposure | `test_finding_correspondence_costs_a_real_multiple`, `test_correspondence_error_tracks_the_slide_while_residual_does_not` |
 | R17 | The passivity of the communication channel shall be established under **time-varying** delay and packet loss, and the accounting shall exclude always-dissipative local terms | wave-domain channel energy stays ≥ 0 under ±40 ms jitter and 40% loss with an energy budget; the same run reads +0 on a system-level balance that hides a −0.017 mJ violation | `test_energy_budget_never_lets_the_channel_create_energy`, `test_constant_delay_channel_is_passive`, `test_the_system_level_balance_cannot_see_the_violation` |
 | R18 | A robustness result shall be reported only for a configuration that **completes the task**, and the completion measure shall be reported with it | at #50's drift gain the tool stops at 34.8 mm of a 55 mm target; every channel result is reported with depth reached | `test_exp50_gain_cannot_reach_the_target_so_the_channel_is_barely_excited`, `test_completing_the_task_makes_the_same_jitter_create_far_more_energy` |
+| R19 | When a stressor's **shape** is varied, its first moments (mean delay, mean loss rate) shall be held fixed, and the metric used shall be one the effect can appear in | burst length varied 1→80 at a fixed 10% loss and a matched mean one-way delay; max drawdown orders the conditions (30.9 → 54.2 mJ) where `E_min` does not | `test_gilbert_elliott_holds_the_average_loss_rate_across_burst_lengths`, `test_matching_the_mean_delay_is_what_makes_the_comparison_fair`, `test_e_min_cannot_rank_the_conditions_but_drawdown_can` |
+| R20 | Before a term that lies outside a guarantee is removed or suppressed, the safety function it is performing shall be identified and replaced | gating the drift term on the passivity budget raises worst blind tool travel 4.72 → 6.53 mm at a 160 ms mean burst | `test_gating_the_drift_term_makes_blind_travel_worse`, `test_holding_a_stale_command_is_self_limiting` |
 
 ## 3. Hazard analysis
 
@@ -86,17 +89,19 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H24 | A stability proof is read as covering the whole controller | The wave-variable passivity argument covers the wave transform only; the drift-correction term λ(x_m − x_s) added to fix position offset sits outside it | S1 | High | The channel's stored energy is accounted **in wave coordinates**, where the claim is exact, and the gain is swept so the uncovered term's contribution is visible | `test_completing_the_task_makes_the_same_jitter_create_far_more_energy` (860× more energy created at the gain that finishes the task), `test_the_system_level_balance_cannot_see_the_violation` | The proof stayed true throughout; it simply never covered the part doing the work. Only the wave block is verified passive here — the system including the correction term is not. Clinical systems avoid this by using a separate position channel rather than leaning on this gain. |
 | H25 | A safety limit is verified at the operator's end and read as protecting the patient | The forbidden-zone wall is rendered on the master (which is correct for stability), so the measured penetration describes the surgeon's hand | S3 | High | Penetration reported at **both** ends, plus the tool's lag while the hand is against the wall | `test_the_wall_protects_the_hand_not_the_tool` (master 0.16–0.21 mm, tool 2.2–2.4 mm behind) | In this layout the tool lags, so the wall errs toward over-protection; with the tool leading instead, the same instrumentation would report a safe number while the patient was harmed. The de-jitter buffer makes the lag worse (2.46 mm). Same defect as H4 (FRE ≠ TRE), one layer out. |
 | H26 | A test passes because the configuration cannot exercise the failure | #50's drift gain leaves a steady-state error under tissue load, so the tool stopped 20 mm short of target and the channel was barely excited | S2 | Med | The task-completion check (depth reached) reported next to every channel result; the gain raised until the task completes before drawing conclusions | `test_exp50_gain_cannot_reach_the_target_so_the_channel_is_barely_excited`, `test_the_link_is_oversampled_for_this_task` | ±40 ms jitter and 40% loss looked harmless for four sections before this was noticed. Task completion is now the precondition for reading any robustness result in this chain, alongside H20's ablation requirement. |
+| H27 | A mitigation is removed together with a defect it happens to share a mechanism with | The drift-correction term is identified (H24) as the uncovered passivity leak, so suppressing it looks like the fix; it is also the position servo that halts the tool during a blackout | S3 | High | Blind tool travel measured for hold-last, energy budget, and budget-with-the-drift-term-gated; the "obvious fix" is scored rather than assumed | `test_gating_the_drift_term_makes_blind_travel_worse` (4.72 → 6.53 mm at a 160 ms mean burst), `test_holding_a_stale_command_is_self_limiting` | **Not resolved.** A dedicated "communication lost → stop" function is still missing. Budget exhaustion supplies the decision instant without a tuned threshold but does not enforce the stop, and the self-limiting behaviour that currently bounds the excursion is a property of this heavy, well-damped axis — a light low-friction axis need not have it. |
+| H28 | A playout buffer sized for a bounded jitter is carried over to a heavy-tailed one | A Pareto delay tail has no maximum, so a playout deadline discards the tail instead of absorbing it — converting delay into loss the network never had | S2 | High | Buffer swept by delay quantile with late-drop rate, standing latency and oscillation reported together; energy metrics deliberately excluded because they are not comparable across different mean delays | `test_an_undersized_playout_buffer_turns_delay_into_loss` (41% late drops on a 5%-loss link at a p50 buffer), `test_a_large_buffer_buys_passivity_with_latency_that_costs_oscillation` | No sufficient buffer exists. The delay↔loss↔oscillation exchange rate has to be set from outside the system by the latency the procedure tolerates; this repo does not have that number. |
 
 ## 4. Traceability summary
 
-- **222 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
-  medical chain (39–56) carries **152** of them, distributed as: kinematics 4, dynamics 3, planar
+- **237 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
+  medical chain (39–57) carries **167** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R18 above each name the tests that verify them; hazards H1–H26 each name the tests
+- Requirements R1–R20 above each name the tests that verify them; hazards H1–H28 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -127,7 +132,22 @@ The dominant residual risks are, in order:
    only over the block the claim covers, and report robustness only for a configuration that completes the
    task. The corollary is uncomfortable — a passing robustness test is evidence about the test as much as
    about the system.
-4. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
+4. **The uncovered term is also load-bearing** (H27). #57 removed #56's jitter symmetry (bursty loss, a
+   Pareto delay tail) expecting #56's conclusion to shrink. It did not, and the reason inverts #56's
+   framing: holding a stale command is **self-limiting** (past ~60 ms of holding the tool crawls at a
+   third of its initial speed), and what provides that brake is the very drift-correction term H24 named as
+   the uncovered leak. Gating it on the passivity budget — the obvious fix — raises worst blind tool travel
+   4.72 → 6.53 mm. So R20: identify and replace what an out-of-guarantee term is silently doing before
+   suppressing it. A dedicated "communication lost → stop" function is still **missing**; budget exhaustion
+   gives the decision instant without a tuned threshold but does not enforce the stop, and the
+   self-limiting behaviour that currently bounds the excursion belongs to this heavy, well-damped axis.
+5. **No sufficient playout buffer on a heavy-tailed link** (H28). A Pareto tail has no maximum, so #56's
+   "buy 45 ms and be done" does not carry over: imposing a playout deadline **manufactures loss the network
+   never had** (41% late drops on a 5%-loss link at a p50 buffer, where an undersized buffer is dominated on
+   every axis), while a p99.9 buffer removes the drops and pays 328 ms of standing latency that raises
+   oscillation 0.30 → 1.90 mm. The delay↔loss↔oscillation exchange rate must come from the latency the
+   procedure tolerates — a number this repo does not have.
+6. **Assumptions bought as regularization** (H13/H14/H15). #51 quantified the rigid gap — the full shift
    at the target, 2.7–10 mm here — and showed it can be recovered to sub-millimetre. But what recovered
    it through a narrow exposure was a *prior* ("the skull holds the scalp outside the window"), not the
    interpolator, and the volumetric physics model was measurably **biased** in a way grid refinement made
@@ -141,10 +161,10 @@ The dominant residual risks are, in order:
    and stays there under every remedy, because at target depth the signal is already below the check's
    own noise. The needle model carries the same shape of risk (small-angle beam, simplified tissue
    channel).
-5. **Everything is simulated below the interface** (H4/H5/H6). The "real" arm is a deliberately
+7. **Everything is simulated below the interface** (H4/H5/H6). The "real" arm is a deliberately
    mismatched simulation without backlash, joint elasticity or gear nonlinearity; force sensing is
    ideal. Stability margins that depend on sensor noise and delay are therefore unverified.
-6. **The human, and what the channel model still idealizes** (H11/H12/H25). #56 added jitter, loss and
+8. **The human, and what the channel model still idealizes** (H11/H12/H25). #56 added jitter, loss and
    reordering, but its jitter is zero-mean uniform and its loss independent Bernoulli; real networks have
    a long late tail and bursty loss, and the cancellation that kept the channel passive in #56's §A leans
    on that symmetry. The receiver policy (keep-newest / discard-stale) is fixed, and a playout receiver
@@ -181,12 +201,18 @@ The dominant residual risks are, in order:
   on the master for good stability reasons; the number it produces describes the hand. A patient-side
   measure (tool position against the forbidden zone, through whatever tracking exists) is the missing
   instrument.
+- **A `communication lost -> stop` function that actually enforces the stop** (H27). #57 shows budget
+  exhaustion supplies the decision instant with no tuned threshold, and that the excursion is currently
+  bounded by a term nobody designed for that purpose. Both halves need to be made explicit: a declared
+  halt behaviour, and a replacement for the braking action before the uncovered term is ever suppressed.
+- **A latency budget from the procedure, not from the algorithm** (H28). Sizing a playout buffer on a
+  heavy-tailed link is a choice among delay, loss and oscillation; nothing inside the system picks it.
 - Software lifecycle artefacts (configuration management, change control, unit-level requirements
   tracing) if this were ever more than a research lab.
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–56
+- Experiments and measured numbers: [README](README.md) §39–57
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)

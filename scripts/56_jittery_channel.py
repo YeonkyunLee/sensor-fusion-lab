@@ -105,6 +105,10 @@ class Channel:
         self.last = zero
         self.newest = -1
         self.n_sent = self.n_lost = self.n_stale = self.n_starved = self.n_late = 0
+        # 굶은 **연속 구간**의 최대 길이. 평균 굶은 비율이 같아도 이 값이 크면 붙들고 있는 시간이
+        # 길다는 뜻이라 성질이 다르다(exp 57 의 연집 손실이 겨냥하는 지점). 시작 구간(첫 수신 전)은
+        # 세지 않는다 — 그건 공칭 지연이지 사건이 아니다.
+        self.starve_run = self.max_starve_run = 0
 
     def send(self, k, payload):
         self.n_sent += 1
@@ -145,7 +149,11 @@ class Channel:
         self.q = keep
         if best is None:
             self.n_starved += 1
+            if self.newest >= 0:
+                self.starve_run += 1
+                self.max_starve_run = max(self.max_starve_run, self.starve_run)
             return (self.last if hold else self.zero), False
+        self.starve_run = 0
         self.newest, self.last = best[0], best[1]
         return best[1], True
 
@@ -155,7 +163,7 @@ class Channel:
 # --------------------------------------------------------------------------- #
 def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         b_wave=None, vf_stiffness=0.0, steps=STEPS, energy_mode="cumulative",
-        lam_pos=None, buf_ms=0.0, rate_hz=None):
+        lam_pos=None, buf_ms=0.0, rate_hz=None, chan=None, lam_gate=False):
     """한 조건 시뮬레이션.
 
     mode:
@@ -166,6 +174,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
       'pp'   — 직접 힘반사 (투명하지만 취약, 대조군)
 
     energy_mode: 'cumulative'(누적 에너지 전송) | 'increment'(증분 전송) — 손실 내성 대조용
+    chan: 채널 생성자. 기본은 Channel(평균 0 균등 지터 + 독립 베르누이 손실). exp 57 이
+          연집 손실·긴 지연 꼬리 채널을 여기에 끼워 넣어 **플랜트와 제어를 그대로 두고 채널만**
+          바꾼다 — 이 실험이 exp 50 에 한 것과 같은 방식.
     """
     rng = np.random.default_rng(20250805 + 1000 * seed)
     b = (B_WAVE_BIG if mode == "bigb" else (B_WAVE if b_wave is None else b_wave))
@@ -178,8 +189,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     # 그 단위로 적어야 수신단이 붙들고 있는 동안 꺼내 쓰는 양과 맞는다.
     n_step = max(int(round(1.0 / (rate_hz * DT))), 1) if rate_hz else 1
     t_s = n_step * DT
-    ch_ms = Channel(rng, delay_ms, jitter_ms, loss, zero=zero)   # 마스터 → 팔
-    ch_sm = Channel(rng, delay_ms, jitter_ms, loss, zero=zero)   # 팔 → 마스터
+    make = Channel if chan is None else chan
+    ch_ms = make(rng, delay_ms, jitter_ms, loss, zero=zero)       # 마스터 → 팔
+    ch_sm = make(rng, delay_ms, jitter_ms, loss, zero=zero)       # 팔 → 마스터
     tissue = tele.Tissue()
     sq = np.sqrt(2 * b)
 
@@ -190,7 +202,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     bud_u = bud_w = 0.0              # 상대가 알려온 예산(누적 모드면 그 값 그대로)
     e_u_inc = e_w_inc = 0.0          # 증분 모드에서 이번 패킷에 실어 보낼 몫
 
-    log = dict(t=[], xm=[], xs=[], fe=[], fm=[], e_ch=[], e_sys=[], beta=[])
+    log = dict(t=[], xm=[], xs=[], fe=[], fm=[], e_ch=[], e_sys=[], beta=[],
+               starved=[])
     e_sys_in = e_sys_out = 0.0       # exp 50 식 시스템 에너지 수지(비교용)
     n_att = 0
     beta_sum = 0.0
@@ -248,7 +261,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             if lam:
                 # exp 50 이 표류를 잡으려고 얹은 위치 보정. **이 항은 파동 변환 밖**이라 위
                 # 수동성 장부가 보증하지 않는다 — 이 실험에서 결국 물리는 자리가 여기다.
-                vs_cmd += lam * (xm_rx - xs)
+                # lam_gate=True 면 이 항도 같은 예산 신호(β)로 함께 죈다. exp 57 이 "예산은
+                # 파동만 죄므로 도구를 세우지 못한다"를 확인하고 그 처방으로 쓰는 스위치다.
+                vs_cmd += lam * (beta_u if lam_gate else 1.0) * (xm_rx - xs)
             w_out = (b * vs - F_s) / sq
             if do_send:
                 e_w_inc = 0.5 * w_out * w_out * t_s
@@ -266,8 +281,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             if do_send:
                 ch_ms.send(k, (xm, 0.0, 0.0))
                 ch_sm.send(k, (xs, 0.0, 0.0))
-            (xm_rx, _, _), _ = ch_ms.recv(k, hold, n_buf)
-            (xs_rx, _, _), _ = ch_sm.recv(k, hold, n_buf)
+            (xm_rx, _, _), fresh_u = ch_ms.recv(k, hold, n_buf)
+            (xs_rx, _, _), fresh_w = ch_sm.recv(k, hold, n_buf)
             f_m_ch = -K_C * (xm - xs_rx)
             f_coup = K_S * (xm_rx - xs)
             f_loc = -D_S * vs
@@ -297,6 +312,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         log["t"].append(t); log["xm"].append(xm); log["xs"].append(xs)
         log["fe"].append(f_e); log["fm"].append(f_m_ch)
         log["e_ch"].append(e_ch); log["e_sys"].append(e_sys); log["beta"].append(beta)
+        # 이번 스텝에 **새 표본이 없었나**. 굶은 구간에 도구가 얼마나 움직였는지(= 모르는 채로 간
+        # 거리)를 뒤에서 재려고 남긴다 — exp 57 이 연집 손실의 안전 비용을 여기서 뽑는다.
+        log["starved"].append(0.0 if (fresh_u and fresh_w) else 1.0)
 
         if not (abs(xm) < 0.5 and abs(xs) < 0.5 and abs(vm) < 50 and abs(vs) < 50):
             diverged = True
@@ -306,6 +324,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     n = len(arr["t"])
     starved = ch_ms.n_starved + ch_sm.n_starved
     res = dict(mode=mode, diverged=diverged, log=arr, jitter_ms=jitter_ms, loss=loss,
+               chans=(ch_ms, ch_sm),        # 채널 통계(굶음·폐기·지각)를 바깥에서 볼 수 있게
                n_starved=starved, starve_frac=starved / max(2 * n, 1),
                n_lost=ch_ms.n_lost + ch_sm.n_lost,
                n_stale=ch_ms.n_stale + ch_sm.n_stale,
@@ -318,11 +337,16 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         res.update(stable=False, osc_mm=np.inf, e_min=-np.inf, e_sys_min=-np.inf,
                    force_err_N=np.inf, pos_err_mm=np.inf, final_depth_mm=np.nan,
                    tool_pen_mm=np.nan, master_pen_mm=np.nan, lag_mm=np.inf,
-                   force_err_max_N=np.inf, force_err_punc_N=np.inf, punct_ms=np.nan)
+                   force_err_max_N=np.inf, force_err_punc_N=np.inf, punct_ms=np.nan,
+                   e_drawdown=np.inf)
         return res
     res["osc_mm"] = float(np.std(arr["xs"][int(0.8 * n):]) * 1e3)
     res["stable"] = bool(res["osc_mm"] <= 0.5)
     res["e_min"] = float(np.nanmin(arr["e_ch"])) if is_wave else np.nan
+    # **최대 낙폭**: 어느 구간에서든 채널이 순수하게 꺼내 쓴 양의 최대치. 누적 최솟값(e_min)은
+    # 선로에 떠 있는 에너지 저수지에 가려지므로, 한 사건의 크기를 보려면 이쪽을 봐야 한다.
+    res["e_drawdown"] = (float(np.max(np.maximum.accumulate(arr["e_ch"]) - arr["e_ch"]))
+                         if is_wave else np.nan)
     res["e_sys_min"] = float(arr["e_sys"].min())
     res["force_err_N"] = float(np.sqrt(np.mean((arr["fm"] - arr["fe"]) ** 2)))
     # RMS 는 **사건을 가린다**. 손이 실제로 정보를 받는 순간은 관통 과도(수 ms)이고, 그 구간의
