@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-59 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+60 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and finally asking whether stopping is even a safe state, which turned out to need a better model before a better controller.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -124,6 +124,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 57 | **bursty loss + a heavy delay tail** (removes #56's symmetry) | my prediction was wrong: holding a stale command is **self-limiting**, and the term #56 called a defect is the **brake**. What actually broke is buffer sizing — a playout deadline manufactures loss the network never had (41% at p50) |
 | 58 | **stop when the link is lost** (fixes what #57 exposed) | ablation shows the bound was accidental — blind travel spreads **2.1 → 28.9 mm** depending on which term survives. A local stop triggered by the *declared clinical margin* collapses that to **1.2 → 2.8 mm** and the task still completes; then #57's failed remedy stops being harmful (**R20 verified**) |
 | 59 | **is stopping a safe state?** (#58's two admissions) | both were **model** problems, not control problems: the chain's tissue model has no post-puncture elasticity, so "holding while the patient moves" produces 0.12 N of force swing where a stick-slip grip term produces 1.62 N (**14×**) — you cannot compare policies a model cannot express. And locking the master makes resumption **worse** because it hides the very cue the operator would react to |
+| 60 | **is that measurement worth making?** (before going to measure it) | **no** — across every plausible clinical exchange rate the decision is unchanged, so the binding unknown was never the tissue. Worse, #59's stated flip condition was **backwards**: retraction drags against the same grip, so a stronger grip makes retracting worse. And the grip **saturates at K_grip × relative motion** — above that the parameter is neither harmful nor identifiable, so **the reason it cannot be measured is the reason it does not matter** |
 
 ## Experiments
 
@@ -1914,6 +1915,58 @@ passivity and task completion unchanged.
 
 ![what is a safe state](assets/59_what_is_safe_state.png)
 
+### 60. Is that measurement worth making? (`scripts/60_measure_to_decide.py`)
+#59 ended by admitting that its verdict rested on grip parameters that were order-of-magnitude
+guesses, and I wrote that the next step was to go and measure them. **Before spending a measurement,
+compute whether it would change a decision.** That is this experiment, and the answer was no.
+
+**A. The decision map.** Hold and retract are scored on two axes — the force swing the tissue receives
+while stopped, and the blind travel bought with it. Trading one for the other needs an **exchange rate
+in mm per N**, which is a *clinical* number, so it is swept rather than fixed (the same slot as #58's
+declared margin and #57's tolerable latency). Retraction needs at least **8 mm/N** before it wins
+anywhere, and in **6 of 15** tissue/motion combinations it is worse on *both* axes.
+
+**B. So the information is worth nothing here.** Below ~5 mm/N the decision is *hold* for every slip
+limit from 0.4 to 6.4 N. The binding unknown was never the tissue — it is the exchange rate, and that
+is declared, not measured. Two further things fell out:
+
+- **#59's stated flip condition was backwards.** It said a *larger* slip limit would favour retracting.
+  It is the opposite: retracting drags against the same grip, and the drag is exactly `F_slip`. #59
+  reasoned only about the holding side and missed that retraction pays the same term.
+- **F_slip = 3.2 N and 6.4 N give identical numbers to three decimals.** The grip saturates at
+  `K_grip × relative motion`, and above that the parameter has no effect on the system at all.
+
+**C. If it is ever needed, a normal insertion cannot give it.** While advancing, the tissue is
+continuously slipping, so the grip enters as a constant: the fitted intercept equals `F_cut + F_slip`
+**to three decimals** at every value tested. It is perfectly confounded — not noisy, *absent*. The
+insertion is not wasted, though: its **slope** is a clean friction estimate (12.0 N/m against a true 12,
+independent of F_slip) that then corrects the dwell fit. Separating what a record cannot give from what
+it can is the whole of identification design.
+
+**D. So stop and let the tissue move — but only a large enough motion works.** Both sides slip only if
+the excursion exceeds `2·F_slip/K_grip`, which cannot be chosen in advance because it depends on the
+unknown. The fix is an **amplitude ladder**: climb until the estimate stops growing. That recovers every
+value exactly (0.4 → 6.4 N, 0.0% error) and the converged amplitude tracks the predicted requirement
+within one rung. **Convergence is knowable without knowing the truth.** Breathing alone caps the estimate
+at `K_grip × A / 2 = 1.50 N` *for any tissue* — a stiff tissue returns a plausible wrong number that is
+really the breathing amplitude. Sensor noise then biases the estimate **upward only** (+8% at 0.01 N,
++83% at 0.10 N for a 0.4 N grip), because a peak-to-peak measure absorbs noise on one side.
+
+**The result that ties A–D together:** the same product `K_grip × relative motion` caps both the harm
+and the observability. Above it the parameter is neither dangerous nor identifiable — **the reason it
+cannot be measured is the reason it does not matter.**
+
+- Honest scope: the decision map is one scenario (#59's channel, stop policy and 1 mm margin). Harm is
+  scored as a force **swing**; if the real injury is dose or duration the value of the measurement changes
+  — a metric choice decides what information is worth. The first metric tried, the increment since the stop
+  instant, was **sensitive to the breathing phase at which the stop landed** and produced the absurdity of
+  *less* load from *more* patient motion; that is now pinned by a test. Identification assumes this model
+  is true, and real tissue relaxes (still #53's open item), which would tilt the plateau the estimator
+  reads. The 20–60 mm excursions are a **bench specification for a phantom or excised tissue**, not
+  something to do during a procedure.
+
+![is that measurement worth making](assets/60_measure_to_decide.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -1985,6 +2038,7 @@ python scripts/56_jittery_channel.py         # jitter and packet loss: passivity
 python scripts/57_bursty_channel.py          # bursty loss + heavy tail: the leak that was also the brake
 python scripts/58_stop_when_lost.py          # stop when the link is lost: replacing an accidental bound
 python scripts/59_what_is_safe_state.py      # is stopping safe? the model had to be fixed before asking
+python scripts/60_measure_to_decide.py       # is that measurement worth making? (no) + the protocol if it ever is
 pytest -q
 ```
 
@@ -2055,6 +2109,7 @@ scripts/
   57_bursty_channel.py          bursty loss + Pareto delay tail: playout-buffer sizing, self-limiting holds
   58_stop_when_lost.py          designed loss-of-link stop: ablate the accidental brake, then replace it
   59_what_is_safe_state.py      hold vs retract, and the operator side: model expressiveness first
+  60_measure_to_decide.py       value of information, confounding, and an excitation ladder
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
