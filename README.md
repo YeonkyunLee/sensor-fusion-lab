@@ -41,12 +41,12 @@ the image-guided chain — 8 verifiable requirements, 10 hazards with mitigation
 evidence them, and an explicit residual-risk statement. (An engineering exercise, not a regulatory
 submission.)
 
-📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
+🎯 **What is this for, and how is it different?** → [WHAT_THIS_IS_FOR.md](WHAT_THIS_IS_FOR.md)`n(what the chain is good for, how it differs from the usual portfolio / paper code / product code,`nthe five negatives, and the honest limits).`n`n📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-60 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+61 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -125,6 +125,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 58 | **stop when the link is lost** (fixes what #57 exposed) | ablation shows the bound was accidental — blind travel spreads **2.1 → 28.9 mm** depending on which term survives. A local stop triggered by the *declared clinical margin* collapses that to **1.2 → 2.8 mm** and the task still completes; then #57's failed remedy stops being harmful (**R20 verified**) |
 | 59 | **is stopping a safe state?** (#58's two admissions) | both were **model** problems, not control problems: the chain's tissue model has no post-puncture elasticity, so "holding while the patient moves" produces 0.12 N of force swing where a stick-slip grip term produces 1.62 N (**14×**) — you cannot compare policies a model cannot express. And locking the master makes resumption **worse** because it hides the very cue the operator would react to |
 | 60 | **is that measurement worth making?** (before going to measure it) | **no** — across every plausible clinical exchange rate the decision is unchanged, so the binding unknown was never the tissue. Worse, #59's stated flip condition was **backwards**: retraction drags against the same grip, so a stronger grip makes retracting worse. And the grip **saturates at K_grip × relative motion** — above that the parameter is neither harmful nor identifiable, so **the reason it cannot be measured is the reason it does not matter** |
+| 61 | **tissue relaxes** (the physics #60 admitted it was missing) | **both my predictions were wrong**, which is the result. Dose did not flip #60's verdict, and the amplitude ladder cannot falsely converge — at fixed frequency more amplitude is also more velocity, so every ceiling but `F_slip` rises with it. What relaxation actually breaks is the *intercept*: `F_cut + min(F_slip, K·v·τ)`, so a slow insertion measures the **speed**. And the control found that #60's peak metric reads **2.17 N with the patient perfectly still**, identical for every tissue — it was measuring the stop controller |
 
 ## Experiments
 
@@ -1923,8 +1924,11 @@ compute whether it would change a decision.** That is this experiment, and the a
 **A. The decision map.** Hold and retract are scored on two axes — the force swing the tissue receives
 while stopped, and the blind travel bought with it. Trading one for the other needs an **exchange rate
 in mm per N**, which is a *clinical* number, so it is swept rather than fixed (the same slot as #58's
-declared margin and #57's tolerable latency). Retraction needs at least **8 mm/N** before it wins
-anywhere, and in **6 of 15** tissue/motion combinations it is worse on *both* axes.
+declared margin and #57's tolerable latency). Retraction needs at least **15 mm/N** before it wins
+anywhere, and in **13 of 15** tissue/motion combinations it is worse on *both* axes.
+*(These two numbers were 8 mm/N and 6 of 15 as first published; #61 found that the load metric
+aggregated the force swing across every stop in a run, so a stop spanning the puncture pinned it to
+`F_PUNC`. Measured per stop, the conclusion is unchanged and stronger.)*
 
 **B. So the information is worth nothing here.** Below ~5 mm/N the decision is *hold* for every slip
 limit from 0.4 to 6.4 N. The binding unknown was never the tissue — it is the exchange rate, and that
@@ -1966,6 +1970,61 @@ cannot be measured is the reason it does not matter.**
   something to do during a procedure.
 
 ![is that measurement worth making](assets/60_measure_to_decide.png)
+
+### 61. Tissue relaxes (`scripts/61_tissue_relaxes.py`)
+#60 shipped a protocol and a verdict, and wrote a weakness under each: *"real tissue relaxes, so the
+plateau will not be flat"* and *"if harm is dose rather than peak, the value of the information changes."*
+**Viscoelasticity is the physics that links both**, so it tests #60 against #60's own stated doubts —
+and closes the oldest open item in this chain, the one #53 named. It is added as a Maxwell element: the
+grip's elastic anchor creeps toward the tool with time constant τ, so held deformation persists while
+the force decays. τ = ∞ reproduces #60 exactly (test-pinned).
+
+**I made two predictions going in. Both were wrong, and that is the experiment.**
+
+**Prediction 1 — dose would flip the verdict. It did not.** Scoring harm as `∫|F| dt` while stopped moves
+every number: retract's force side is now better in *every* cell, because a peak metric sees the
+retraction transient while dose sees the lower steady state that follows it. But the *shape* is
+unchanged — below some exchange rate the answer is "hold" for every slip limit, and the binding unknown
+is still a **declared** rate, now in mm per N·s instead of mm per N. A metric change moves the window
+and the units, not the conclusion.
+
+**Prediction 2 — the amplitude ladder would converge cleanly at a wrong value. It cannot.** At fixed
+frequency, raising amplitude also raises velocity (`v = A·ω`), so the viscous ceiling `K·v·τ` and the
+geometric ceiling `K·A` **both climb with the ladder**. Every ceiling except `F_slip` itself rises, so a
+false plateau is structurally impossible: the ladder either lands on the truth or honestly reports
+non-convergence. #60's criterion covered relaxation for a reason #60 did not know. What relaxation costs
+is not correctness but **amplitude** — at τ = 0.2 s and 0.11 Hz a 3.2 N grip is still unresolved at
+60 mm, where the elastic case converged at 20 mm. Raising the frequency is the cheap fix (40 mm at
+1.1 Hz), and the two requirements merge into a **velocity** spec: `A > 2·F_slip/K_grip` **and**
+`A·ω > F_slip/(K_grip·τ)`.
+
+**What did break — and it was not what I was looking for.** Two metric defects, both in quantities #60
+introduced:
+
+- **#60's peak metric was measuring the stop controller, not the tissue.** The control is trivial and I
+  should have run it there: hold with the patient **perfectly still**. It reads **2.17 N**, and it is
+  identical for every slip limit and every τ — it is the hold controller settling onto its target.
+  Patient motion adds only 0.5 N on top. Dose, by contrast, responds to both (1.50 → 1.67 N·s across
+  slip limits; 1.67 vs 2.08 with and without relaxation). #60 swapped the increment metric for the peak
+  to fix a phase-sensitivity problem and imported a different blindness. **Redrawn on the metric that can
+  see the tissue, #60's conclusion still holds** — which makes it more trustworthy than it was.
+- **The swing was aggregated across every stop in a run.** One stop spanning the puncture pins it to
+  `F_PUNC`, so half the seeds read exactly 4.00 N regardless of the tissue. Now measured **per stop**;
+  #60's published numbers move accordingly (8 → 15 mm/N, 6 → 13 of 15) and its conclusion strengthens.
+
+**The one real protocol break** is the insertion intercept. #60 showed it equals `F_cut + F_slip` to
+three decimals; with relaxation it is `F_cut + min(F_slip, K·v·τ)`, predicted to within 0.6% across five
+τ. A slow insertion therefore measures the **insertion speed** wearing the tissue's clothes — the
+confounding set grew by one, and the two wrong answers are equally plausible.
+
+- Honest scope: relaxation is a single Maxwell element; real soft tissue has a broad relaxation spectrum
+  and QLV is the standard model, so the question answered here is "what breaks if relaxation exists", not
+  "what is τ". The cutting baseline is not relaxed (axial friction during a hold really does, so this is
+  optimistic). Dose includes the cutting baseline, which dilutes the policy difference. And relaxing
+  tissue holds its **deformation** after the force is gone — if injury is strain or ischaemic time rather
+  than force, a third metric is needed and this experiment does not have it.
+
+![tissue relaxes](assets/61_tissue_relaxes.png)
 
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
@@ -2039,6 +2098,7 @@ python scripts/57_bursty_channel.py          # bursty loss + heavy tail: the lea
 python scripts/58_stop_when_lost.py          # stop when the link is lost: replacing an accidental bound
 python scripts/59_what_is_safe_state.py      # is stopping safe? the model had to be fixed before asking
 python scripts/60_measure_to_decide.py       # is that measurement worth making? (no) + the protocol if it ever is
+python scripts/61_tissue_relaxes.py          # tissue relaxes: does #60's protocol - or its verdict - survive?
 pytest -q
 ```
 
@@ -2110,6 +2170,7 @@ scripts/
   58_stop_when_lost.py          designed loss-of-link stop: ablate the accidental brake, then replace it
   59_what_is_safe_state.py      hold vs retract, and the operator side: model expressiveness first
   60_measure_to_decide.py       value of information, confounding, and an excitation ladder
+  61_tissue_relaxes.py          viscoelasticity vs #60: two failed predictions, two metric defects
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)

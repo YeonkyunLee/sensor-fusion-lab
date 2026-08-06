@@ -153,11 +153,14 @@ def test_hold_load_metric_must_not_depend_on_the_stop_phase():
     """정지 시점 대비 증분은 위상에 휘둘려 **환자가 더 움직일수록 부하가 작아지는** 착시를 만든다.
 
     진폭 지표는 환자 움직임이 커지면 커져야 한다 — 그게 물리다.
+
+    시드 수에 주의: 폐루프에서는 정지가 언제·어디서 걸리는지가 시드마다 달라 3 시드로는
+    중앙값이 뒤집힌다(exp 61 에서 밟았다). 8 시드에서 1.87 → 2.24 로 물리를 따른다.
     """
     swings, incs = [], []
     for breath in (2.0, 10.0):
         sw, inc = [], []
-        for s in range(3):
+        for s in range(8):
             r = m.bc.run("tdpa", seed=s, tail_ms=s59.TAIL_MS, loss=0.10,
                          burst_len=s59.BURST_MS, estop=True, resume_ms=60.0,
                          blind_mm=1.0, breath_mm=breath, breath_hz=s59.BREATH_HZ,

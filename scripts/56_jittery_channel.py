@@ -259,7 +259,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     xm_hold = 0.0
     f_e_held_max = depth_held_max = mismatch_release = 0.0
     df_held_max = f_e_at_stop = 0.0
-    f_e_held_lo, f_e_held_hi = np.inf, 0.0
+    f_e_held_lo, f_e_held_hi, f_e_held_swing = np.inf, 0.0, 0.0
+    dose_held = secs_held = 0.0
     op_seen, op_still, op_frozen = 0.0, 0, None   # 적응형 술자 상태(op_react_ms > 0)
     xs_rx = 0.0                                    # 술자가 화면으로 보는 팔 위치(지연된 값)
     for k in range(steps):
@@ -372,6 +373,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                             x_hold = max(xs - retract_mm * 1e-3, X_SURFACE + surf)
                         xm_hold = xm
                         f_e_at_stop = abs(f_e)   # 정지 시점의 조직력(절삭 기저)
+                        f_e_held_lo = f_e_held_hi = abs(f_e)   # 진폭은 **정지 1회 단위**로
                         n_estop += 1
                 else:
                     blind_acc = 0.0
@@ -383,8 +385,16 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 # 증분은 **정지가 걸린 위상**에 민감하다(호흡 마루에서 멈추면 작게 나온다). 정지 구간
                 # 안에서의 **진폭**은 그 위상에 무관하므로 정책 비교에는 이쪽이 맞다(exp 60 에서
                 # 증분만 보다가 환자 움직임이 클수록 부하가 작아지는 비단조를 만났다).
+                # 단 **정지 1회 단위**로 재야 한다 — 전체 구간에 걸쳐 min/max 를 누적하면 서로 다른
+                # 깊이의 정지가 섞이고, 관통 순간을 걸친 정지가 하나라도 있으면 스윙이 조직 파라미터와
+                # 무관하게 F_PUNC 로 찍힌다(exp 61 에서 시드 절반이 정확히 4.00 N 으로 나와 잡았다).
                 f_e_held_lo = min(f_e_held_lo, abs(f_e))
                 f_e_held_hi = max(f_e_held_hi, abs(f_e))
+                f_e_held_swing = max(f_e_held_swing, f_e_held_hi - f_e_held_lo)
+                # 최댓값 계열 지표는 **지속시간을 못 본다.** 조직 손상이 누적이라면 이쪽이 맞는
+                # 지표다(exp 60 이 "지표가 정보의 값을 정한다"로 남긴 항목, exp 61 에서 씀).
+                dose_held += abs(f_e) * DT
+                secs_held += DT
                 depth_held_max = max(depth_held_max, xs - surf - X_SURFACE)
                 # 램프는 **정보가 실제로 오는 스텝에서만** 올라간다. 굶은 스텝에서는 리셋하지 않고
                 # 그대로 멈춰 둔다 — 연속 fresh 를 요구하면 지터 채널에서 영구히 래치된다(처음에
@@ -475,8 +485,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                n_estop=n_estop, held_frac=n_held / max(len(log["t"]), 1),
                resume_vmax_mms=resume_vmax * 1e3,
                f_e_held_max=f_e_held_max, df_held_max=df_held_max,
-               f_e_held_swing=(0.0 if not np.isfinite(f_e_held_lo)
-                               else f_e_held_hi - f_e_held_lo),
+               f_e_held_swing=f_e_held_swing,
+               f_e_held_dose=dose_held, secs_held=secs_held,
                mismatch_release_mm=mismatch_release * 1e3,
                depth_held_max_mm=depth_held_max * 1e3,
                waste_frac=(ch_ms.n_stale + ch_sm.n_stale + ch_ms.n_late
