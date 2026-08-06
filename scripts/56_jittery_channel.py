@@ -264,6 +264,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     df_held_max = f_e_at_stop = 0.0
     f_e_held_lo, f_e_held_hi, f_e_held_swing = np.inf, 0.0, 0.0
     dose_held = secs_held = 0.0
+    drag_held = drag_last = 0.0                   # 회복 불가 조직 변형(exp 63); 모델이 세면 쓴다
     op_seen, op_still, op_frozen = 0.0, 0, None   # 적응형 술자 상태(op_react_ms > 0)
     t_op, op_rate = 0.0, 1.0                      # 술자의 내부 시계와 그 진행 속도(exp 62)
     n_adverse = n_force_cue = 0
@@ -401,6 +402,10 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 # 지표다(exp 60 이 "지표가 정보의 값을 정한다"로 남긴 항목, exp 61 에서 씀).
                 dose_held += abs(f_e) * DT
                 secs_held += DT
+                # 조직 모델이 **회복 불가 변형**을 세고 있으면(exp 63) 정지 구간 몫만 따로 모은다.
+                # 힘 계열 지표 셋(증분·진폭·누적)이 전부 못 보는 축이다 — 이완하면 힘은 사라져도
+                # 끌려간 조직은 그대로 남는다.
+                drag_held += max(0.0, getattr(tissue, "drag", 0.0) - drag_last)
                 depth_held_max = max(depth_held_max, xs - surf - X_SURFACE)
                 # 램프는 **정보가 실제로 오는 스텝에서만** 올라간다. 굶은 스텝에서는 리셋하지 않고
                 # 그대로 멈춰 둔다 — 연속 fresh 를 요구하면 지터 채널에서 영구히 래치된다(처음에
@@ -421,6 +426,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 # 보면 즉시 복귀(램프 0)가 가장 얌전해 보이는 착시가 생긴다 — 처음에 그랬다.
                 resume_win -= 1
                 resume_vmax = max(resume_vmax, abs(vs))
+            # 정지 여부와 무관하게 매 스텝 갱신해야 위의 정지 구간 델타가 맞는다.
+            drag_last = getattr(tissue, "drag", 0.0)
 
         # ---- 채널 에너지(파동 좌표, 주장이 걸린 블록) ----
         e_ch = (e_u_sent + e_w_sent) - (e_u_ext + e_w_ext) if is_wave else np.nan
@@ -516,6 +523,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                n_adverse=n_adverse, n_force_cue=n_force_cue,
                op_rate_end=op_rate, t_op_end=t_op,
                f_e_held_dose=dose_held, secs_held=secs_held,
+               drag_held_mm=drag_held * 1e3,
+               drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,
                depth_held_max_mm=depth_held_max * 1e3,
                waste_frac=(ch_ms.n_stale + ch_sm.n_stale + ch_ms.n_late

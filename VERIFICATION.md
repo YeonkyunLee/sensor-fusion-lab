@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–62.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–63.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -38,7 +38,9 @@ whether it would change any decision — and designing the identification protoc
 `61_tissue_relaxes.py` (adding the viscoelasticity #60 said it was missing, which left #60's verdict and
 its ladder standing but exposed that the metric underneath them was reading the stop controller),
 `62_adaptive_operator.py` (giving the operator the force the chain had been transmitting unfelt since #50,
-plus learning and reversal — where R18 caught the author and the paired-statistics rule had to be caught twice).
+plus learning and reversal — where R18 caught the author and the paired-statistics rule had to be caught twice),
+`63_harm_is_not_force.py` (adding a harm axis that is not force, which left the policy verdict standing
+but showed #60's information-value verdict was a statement about the force axis rather than the tissue).
 
 ## 2. Requirements (verifiable)
 
@@ -71,6 +73,7 @@ plus learning and reversal — where R18 caught the author and the paired-statis
 | R25 | A parameter shall not be quoted from a record in which it is **confounded**, and the excitation required to separate it shall be derived and shown to be attainable | in a steady insertion the fitted intercept equals `F_cut + F_slip` to three decimals at every value tested; separation needs a dwell with excursion > `2·F_slip/K_grip`, reached by an amplitude ladder (0.0% error, 0.4–6.4 N) | `test_insertion_constant_is_exactly_cutting_plus_slip`, `test_the_amplitude_ladder_recovers_the_true_slip_limit`, `test_converged_amplitude_tracks_two_fslip_over_kgrip`, `test_breathing_only_estimate_is_capped_by_stiffness_times_amplitude` |
 | R26 | A quantity used to score a hazard shall be shown to respond to that hazard, by a control in which the hazard is absent | holding with the patient **perfectly still** reads 2.17 N on #60's peak metric, identical across slip limits 0.4–6.4 N and across relaxation time constants — it is the stop controller settling; dose over the same control moves 1.50 → 1.67 N·s with the slip limit and 1.67 vs 2.08 with and without relaxation | `test_exp60_peak_metric_measures_the_controller_not_the_tissue`, `test_dose_metric_does_see_the_tissue`, `test_the_structural_conclusion_survives_the_metric_change` |
 | R27 | Where a safety cue can be missed, a **redundant cue on a different physical channel** shall be provided, and its value shall be reported as reliability (seeds rescued) rather than as magnitude | visual reaction alone improves the resume peak on 8/12 seeds; adding force perception takes that to **11/12**, rescuing 3 of the 4 seeds it lost, and leaving the already-winning seeds bit-identical | `test_force_perception_buys_reliability_not_magnitude`, `test_force_perception_actually_fires`, `test_visual_reaction_is_real_but_not_universal` |
+| R28 | A harm shall be scored on **more than one physical axis**, and a conclusion shall be stated as conditional on the axis unless it holds on all of them | three force metrics (increment, swing, dose) correlate 0.48–0.81 with each other and −0.23 to 0.15 with irrecoverable tissue drag; on the force axis the held swing is flat at 2.125 N across slip limits 0.4–6.4 N while drag falls 9.18 → 6.49 mm and the policy winner flips | `test_drag_is_a_different_axis_not_a_third_force_metric`, `test_force_swing_is_flat_in_the_slip_limit_but_drag_is_not`, `test_on_the_drag_axis_the_policy_winner_flips_with_the_slip_limit` |
 
 ## 3. Hazard analysis
 
@@ -117,17 +120,18 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H35 | An identification protocol is validated only against the physics it already assumes | #60's amplitude ladder was derived and tested on a purely elastic grip, while real tissue relaxes — the plateau it reads should tilt | S2 | Med | Relaxation added as a Maxwell element (τ = ∞ reproduces #60 exactly) and the whole protocol re-run across τ and excitation frequency, checking the **convergence flag** as well as the value | `test_the_ladder_never_converges_at_a_wrong_value`, `test_a_false_plateau_is_structurally_impossible_on_the_amplitude_axis`, `test_relaxation_costs_amplitude_not_correctness`, `test_slow_advance_measures_the_speed_not_the_slip_limit` | The ladder held, for a reason not known when it was written: at fixed frequency more amplitude is also more velocity, so every ceiling except `F_slip` rises with the ladder and a false plateau cannot form. The cost is amplitude, not correctness (3.2 N unresolved at 60 mm and 0.11 Hz where the elastic case converged at 20 mm; 40 mm at 1.1 Hz). What did break is the **intercept**: `F_cut + min(F_slip, K·v·τ)`, so a slow insertion measures the insertion speed — the confounding set grew by one. Requirement is now a velocity: `A > 2·F_slip/K_grip` **and** `A·ω > F_slip/(K_grip·τ)`. Relaxation remains a single time constant; a real spectrum (QLV) is untested. |
 | H36 | A safety measure is credited for a gain it obtains by **not completing the task** | Each operator tier is more cautious than the last; at the chain's usual 4 s the resume peak improves 120 → 41 mm/s while the depth reached falls 50.3 → **34.7 mm** of a 55 mm target | S2 | High | Every tier reported with its completion measure (R18), and the whole comparison re-run at 3× duration so all tiers finish (~50.2 mm) before any tier is credited | `test_the_tier_ladder_stops_completing_the_task` (safety improves *and* depth collapses), `test_learning_adds_nothing_once_the_task_has_to_finish`, `test_visual_reaction_is_real_but_not_universal` | This is **R18 catching the author**, at almost the same number (34.7 vs #56's 34.8 mm) — the rule was written in #56 for the channel and re-fired in #62 for the operator, which is the strongest evidence in this document that the rules are load-bearing rather than decorative. What survives matched completion: visual reaction and reversal. Learning is pure cost. The matched comparison assumes **time is free**; for a procedure where it is not, the ranking changes and that number is not in this repo. |
 | H37 | A noisy metric is compared median-to-median and the conclusion inverts | The resume peak spans 47–192 mm/s across seeds in one condition; on 6-seed medians force perception read as "no benefit", on 12 seeds paired by seed it is the most reliable tier | S1 | High | Paired-by-seed statistics adopted as the primary presentation (difference median **and** seeds improved), seeds raised to 12, medians kept only for populating tables | `test_force_perception_buys_reliability_not_magnitude`, `test_reversal_costs_interruptions_not_blind_travel`, `test_master_lock_still_loses_in_every_operator_model` | **Second occurrence of the same defect**: #59 caught it on this exact quantity and #62 repeated it, this time flipping the *sign* of a conclusion rather than only its size. It also produced a second wrong claim — that reversal's cost is blind travel (paired: −0.04 mm, not a cost at all; the real costs are +3 interruptions and +0.33 N of held force). A rule recorded once was not enough; the paired comparison is now built into the experiment's own helper rather than applied by memory. |
+| H38 | Every metric available to score a hazard lies on **one physical axis**, so the family agrees with itself while being blind in the same direction | Increment, peak swing and dose are all forces; #59–#62's tissue-side conclusions all rest on them. During steady slip the force is pinned at `F_slip` while the tissue keeps being dragged — force constant, damage accruing | S3 | High | A second axis added: irrecoverable tissue drag (total grip-anchor travel, counted only over held intervals), scored alongside the three force metrics and checked for rank independence | `test_force_is_pinned_while_the_tissue_keeps_being_dragged`, `test_relaxation_drags_the_tissue_with_no_tool_motion_at_all`, `test_drag_is_a_different_axis_not_a_third_force_metric` (force↔force 0.48–0.81, force↔drag −0.23 to 0.15), `test_drag_is_not_just_a_proxy_for_held_time` | The policy verdict did **not** flip — retraction drags 5 mm by itself, so holding still wins on drag too, and the author's prediction that this was where it would flip was wrong. What flipped is **H32's information-value verdict**, which turns out to have been a statement about the force axis rather than about the tissue: force swing is flat to three decimals across the slip-limit range while drag falls and the winner changes between 0.8 and 1.6 N. The sign inverts too — a stronger grip is **protective** in deformation. The four metrics also split 2–2 on the policy, so adding an axis did not resolve the disagreement #61 found within the force family; it showed the disagreement was never about noise. **Ischaemic time remains unmeasured**: perfusion is a pressure field and this is a 1-DOF axial model, so one non-force axis is open and others are not. |
 
 ## 4. Traceability summary
 
-- **323 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
-  medical chain (39–62) carries **253** of them, distributed as: kinematics 4, dynamics 3, planar
+- **336 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
+  medical chain (39–63) carries **266** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15, safe-state question 13, value of the measurement 25, tissue relaxation 20, adaptive operator 13. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15, safe-state question 13, value of the measurement 25, tissue relaxation 20, adaptive operator 13, harm axes 13. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R27 above each name the tests that verify them; hazards H1–H37 each name the tests
+- Requirements R1–R28 above each name the tests that verify them; hazards H1–H38 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -269,10 +273,13 @@ The dominant residual risks are, in order:
   the viscoelastic relaxation H17 named~~ — added in #61, where the ladder held but the intercept did not,
   and the excitation requirement became a **velocity** (`A·ω > F_slip/(K_grip·τ)`) rather than an
   amplitude. A relaxation *spectrum* (QLV) is still untested.
-- **A hazard measure that is not the force** (H34). Relaxing tissue keeps its **deformation** after the
-  force has decayed. Every metric in this repo — increment, peak swing, dose — is built from force, so
-  if injury is strain or ischaemic time, none of them sees it. This is the one place where the chain's
-  scoring could still be wrong in a way none of its own checks would catch.
+- ~~A hazard measure that is not the force (H34)~~ — opened in #63 (H38) with **irrecoverable tissue
+  drag**. The policy verdict survived, but **#60's information-value verdict did not**: it was a statement
+  about the force axis, and on the drag axis the slip limit decides the policy again, with the sign
+  inverted. What remains is **ischaemic time**, which a 1-DOF axial model cannot express at all — the
+  chain now has two harm axes and still cannot see perfusion, so this entry shrinks rather than closes.
+  And **which axis is the injury** is a fourth number the clinic has to supply, next to tolerable latency,
+  the declared margin and the exchange rate.
 - ~~An operator model that adapts (H31)~~ — done in #62: force perception, learning and reversal all
   added, each as one switch on top of the last. The verdict is mixed and worth stating precisely.
   **Force perception buys reliability, not magnitude** (seeds improved 8/12 → 11/12, rescuing 3 of the 4
@@ -298,7 +305,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–62
+- Experiments and measured numbers: [README](README.md) §39–63
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)

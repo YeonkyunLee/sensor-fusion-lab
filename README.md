@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-62 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+63 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -127,6 +127,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 60 | **is that measurement worth making?** (before going to measure it) | **no** — across every plausible clinical exchange rate the decision is unchanged, so the binding unknown was never the tissue. Worse, #59's stated flip condition was **backwards**: retraction drags against the same grip, so a stronger grip makes retracting worse. And the grip **saturates at K_grip × relative motion** — above that the parameter is neither harmful nor identifiable, so **the reason it cannot be measured is the reason it does not matter** |
 | 61 | **tissue relaxes** (the physics #60 admitted it was missing) | **both my predictions were wrong**, which is the result. Dose did not flip #60's verdict, and the amplitude ladder cannot falsely converge — at fixed frequency more amplitude is also more velocity, so every ceiling but `F_slip` rises with it. What relaxation actually breaks is the *intercept*: `F_cut + min(F_slip, K·v·τ)`, so a slow insertion measures the **speed**. And the control found that #60's peak metric reads **2.17 N with the patient perfectly still**, identical for every tissue — it was measuring the stop controller |
 | 62 | **an operator who feels, learns and backs off** (#59's three admissions) | #50 built wave variables to *transmit* force and then modelled an operator who never used it — twelve experiments sending force to someone who could not feel it. At the chain's usual 4 s the tier ladder looks like a clean win (resume 120 → 41 mm/s) but **depth falls 50.3 → 34.7 mm**: my own operator model broke **R18**, the rule #56 wrote at almost exactly that number. Given time to finish, force perception buys **reliability, not magnitude** — improving seeds 8/12 → **11/12**, rescuing 3 of the 4 seeds visual reaction alone lost |
+| 63 | **harm is not force** (the gap #61 said the chain could not see) | every harm number this chain ever produced was a **force** — increment, peak swing, dose, three swaps on one axis. Scoring irrecoverable **tissue drag** instead: my prediction that retracting would win was **wrong** (it drags 5 mm itself), but **#60's verdict turns out to be axis-conditional**. Force swing is flat at 2.125 N across the whole slip-limit range while drag falls 9.18 → 6.49 mm, and on that axis **the policy winner flips with `F_slip`** — a stronger grip is *protective*, the opposite sign |
 
 ## Experiments
 
@@ -2097,6 +2098,61 @@ loop diverged. **The boundary is not whether the human reacts, but the form of t
 
 ![an adaptive operator](assets/62_adaptive_operator.png)
 
+### 63. Harm is not force (`scripts/63_harm_is_not_force.py`)
+#61 put one item on its limitations list and flagged it as **the only kind this repo's own checks could
+not catch**: *"relaxing tissue keeps its deformation after the force is gone. Every metric here —
+increment, peak swing, dose — is built from force."* Three metric swaps, each fixing the previous one's
+defect, all on **one axis**. If that axis is wrong, all three are wrong together and they agree with each
+other while being wrong. So this experiment changes the axis.
+
+**What it counts.** When the needle drags tissue, the grip's anchor follows — when it slips, and when
+relaxation lets it creep. The anchor's **total travel** is irrecoverable deformation: unlike elastic
+strain it does not come back, and it persists after the force is gone. Force cannot see it for a
+structural reason: **during steady slip the force is pinned at `F_slip` while the anchor keeps moving.**
+Force constant, damage accruing — no force metric can differentiate that out. Holding still under
+breathing, the force settles to ~0.9 N while drag climbs past 17 mm.
+
+**My prediction was wrong.** I expected retraction to win here — holding drags on every breath, retracting
+drags once. It does not: **retracting drags 5 mm of tissue by itself**, so on drag the winner is still
+*hold* (4/12 seeds for retract). Opening a new axis produced no new answer.
+
+**But reading the table the other way is worse.** The four metrics split **2–2**: increment and dose say
+retract (9/12, 11/12), swing and drag say hold (3/12, 4/12). Adding an axis did not resolve the
+disagreement that #61 had already found *within* the force family. "Which metric" is a decision, not a
+detail. (Drag is at least new information, not a repackaged duration: its correlation with held time is
+−0.21.)
+
+**The real result is that #60's verdict was axis-conditional.** #60 concluded the tissue's slip limit was
+not worth measuring because the decision does not depend on it. On the drag axis it does:
+
+| `F_slip` | held force swing | drag, hold | drag, retract | winner on drag |
+|--:|--:|--:|--:|:--|
+| 0.4 N | 2.125 N | 9.18 mm | 13.05 mm | hold |
+| 0.8 N | 2.125 N | 7.77 mm | 8.19 mm | hold |
+| 1.6 N | 2.125 N | 6.49 mm | 4.63 mm | **retract** |
+| 6.4 N | 2.125 N | 6.50 mm | 4.63 mm | **retract** |
+
+The force swing is **flat to three decimals** across the entire range — #60 and #61's saturation, exactly
+as they reported. Drag falls and then saturates, and **the policy winner flips between 0.8 and 1.6 N**.
+And the *sign* is inverted: on force a stronger grip is at best irrelevant, on deformation it is
+**protective**, because tissue that grips harder takes the motion up elastically instead of slipping.
+
+So: the policy ranking did not flip (my prediction), but **the value of the information did** (the more
+important claim). #60's "this measurement changes no decision" was never a fact about the tissue — it was
+a fact about the force axis. Rank correlations confirm the axes are distinct: force metrics correlate
+0.48–0.81 with each other and −0.23 to 0.15 with drag. **Agreement inside a metric family is evidence of a
+shared axis, not of being right.**
+
+- Honest scope: "irrecoverable deformation = total anchor travel" is a definition inside this 1-DOF model;
+  real injury is a nonlinear function of strain, strain rate and cycle count, and sub-threshold dragging
+  may be harmless. **Ischaemic time is still unmeasured** — perfusion is a pressure-field question that an
+  axial 1-DOF model cannot express, so this opens one non-force axis, not all of them. Anchor travel also
+  includes ordinary cutting during insertion, which is the procedure rather than a harm, so only the
+  held-interval share is used for policy comparison. Relaxation is still a single τ and the grip
+  parameters are still not measured.
+
+![harm is not force](assets/63_harm_is_not_force.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -2171,6 +2227,7 @@ python scripts/59_what_is_safe_state.py      # is stopping safe? the model had t
 python scripts/60_measure_to_decide.py       # is that measurement worth making? (no) + the protocol if it ever is
 python scripts/61_tissue_relaxes.py          # tissue relaxes: does #60's protocol - or its verdict - survive?
 python scripts/62_adaptive_operator.py       # an operator who feels, learns and backs off - what survives completion?
+python scripts/63_harm_is_not_force.py       # harm as deformation, not force - the axis the chain could not see
 pytest -q
 ```
 
@@ -2244,6 +2301,7 @@ scripts/
   60_measure_to_decide.py       value of information, confounding, and an excitation ladder
   61_tissue_relaxes.py          viscoelasticity vs #60: two failed predictions, two metric defects
   62_adaptive_operator.py       force perception, learning, reversal - and my own R18 violation
+  63_harm_is_not_force.py       irrecoverable tissue drag: a fourth metric on a different axis
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
