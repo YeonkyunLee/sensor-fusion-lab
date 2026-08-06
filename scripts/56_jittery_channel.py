@@ -82,6 +82,8 @@ ATT_EPS = 1e-12
 # 통신 상실 정지의 국소 위치 유지 이득(exp 58). 팔의 국소 감쇠 D_S 와 같은 자릿수로 두어 별도의
 # 튜닝 손잡이가 되지 않게 한다 — 정지 자체가 새로운 자유도가 되면 "임계값 없는 판정"의 의미가 없다.
 K_HOLD, D_HOLD = 4000.0, 120.0
+# 적응형 술자(exp 62): 학습이 내부 시계를 늦출 수 있는 하한과, 아무 일 없을 때의 회복 속도.
+OP_RATE_MIN, OP_RATE_UP = 0.15, 0.20
 
 MODES = ("zoh", "zero", "tdpa", "bigb", "pp")
 
@@ -169,7 +171,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         lam_pos=None, buf_ms=0.0, rate_hz=None, chan=None, lam_gate=False,
         tissue_on=True, b_scale=1.0, estop=False, resume_ms=0.0, blind_mm=1.0,
         retract_mm=0.0, master_lock=False, breath_mm=0.0, breath_hz=0.25,
-        tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0):
+        tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0,
+        op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0):
     """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
@@ -262,6 +265,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     f_e_held_lo, f_e_held_hi, f_e_held_swing = np.inf, 0.0, 0.0
     dose_held = secs_held = 0.0
     op_seen, op_still, op_frozen = 0.0, 0, None   # 적응형 술자 상태(op_react_ms > 0)
+    t_op, op_rate = 0.0, 1.0                      # 술자의 내부 시계와 그 진행 속도(exp 62)
+    n_adverse = n_force_cue = 0
+    f_ml_prev = 0.0                               # 손이 느끼는 힘에 잠금의 저항도 들어간다
     xs_rx = 0.0                                    # 술자가 화면으로 보는 팔 위치(지연된 값)
     for k in range(steps):
         t = k * DT
@@ -432,19 +438,39 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         # op_react_ms > 0 이면 "도구가 응답하지 않으면 손을 멈춘다". exp 50 은 시각 폐루프를 **이득
         # 있는 루프**로 걸었다가 사람 루프 자체가 발산해서 폐기했는데, 이건 이득이 아니라 **목표를
         # 그 자리에 얼려두는** 규칙이라 발산하지 않는다. 반응 지연은 사람의 반응시간이다.
-        tgt = tele.operator_target(t)
+        # 술자의 **내부 시계**로 목표를 읽는다. 얼어 있는 동안에는 시계도 안 간다 — 손을 멈춘
+        # 술자는 과제를 진행하고 있지 않다. op_learn 이 이 시계의 진행 **속도**를 늦춘다.
+        tgt = tele.operator_target(t_op)
         if op_react_ms > 0.0:
-            # 판정 기준은 **술자가 실제로 보는 양**이다: 화면의 도구가 손보다 얼마나 뒤처졌는가.
-            # 처음엔 "도구가 안 움직이면"으로 짰는데, 붙들려 있는 동안에도 팔이 기어가서(스프링-댐퍼
-            # 유지라 완전 정지가 아니다) 판정이 계속 리셋돼 규칙이 아예 안 걸렸다.
-            if abs(xm - xs_rx) > op_lag_mm * 1e-3:
+            # 판정 기준은 **술자가 실제로 보는/느끼는 양**이다.
+            #  · 시각 단서: 화면의 도구가 손보다 얼마나 뒤처졌는가(exp 59). 처음엔 "도구가 안
+            #    움직이면"으로 짰는데, 붙들려 있는 동안에도 팔이 기어가서 판정이 계속 리셋됐다.
+            #  · 힘 단서(exp 62): 마스터에 표시되는 힘. exp 50 이 파동변수로 **전달**해 놓고도
+            #    술자 모델이 그걸 **쓰지 않고** 있었다 — 못 느끼는 사람에게 힘을 보내고 있었다.
+            cue = abs(xm - xs_rx) > op_lag_mm * 1e-3
+            # 손이 느끼는 것은 채널이 보낸 힘 **더하기 마스터가 스스로 거는 힘**이다. 잠금을
+            # 빼고 채널 힘만 느끼게 하면 "잠금이 단서를 가리는가"라는 질문이 공정하지 않다
+            # (잠금의 저항 자체가 술자에게는 단서다). 한 스텝 전 값을 쓴다 — 1 kHz 에서 무해.
+            if op_force_N > 0.0 and abs(f_m_ch + f_ml_prev) > op_force_N:
+                cue = True
+                n_force_cue += 1
+            if cue:
                 op_still += 1
             else:
                 op_still, op_frozen = 0, None
             if op_still * DT * 1e3 > op_react_ms:
                 if op_frozen is None:
                     op_frozen = tgt                       # 목표를 그 자리에 얼린다(손을 멈춘다)
-                tgt = op_frozen
+                    n_adverse += 1
+                    if op_learn > 0.0:
+                        # **학습**: 겪을 때마다 더 조심스러워진다(고전적인 move-and-wait).
+                        op_rate = max(op_rate * op_learn, OP_RATE_MIN)
+                # **되돌림**: 얼기만 하는 게 아니라 손을 빼기도 한다.
+                tgt = op_frozen - op_reverse_mm * 1e-3
+        if op_frozen is None:
+            t_op += op_rate * DT                          # 얼어 있으면 과제가 진행되지 않는다
+            if op_learn > 0.0:
+                op_rate = min(op_rate + OP_RATE_UP * DT, 1.0)   # 아무 일 없으면 천천히 회복
         f_h = K_OP * (tgt - xm) - D_OP * vm
 
         # ---- 정지 중 마스터 제동 (exp 59) ----
@@ -453,6 +479,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         f_ml = 0.0
         if master_lock and estop and stopped:
             f_ml = K_HOLD * (xm_hold - xm) - D_HOLD * vm
+        f_ml_prev = f_ml
 
         am = (f_h + f_m_ch + f_vf + f_ml - B_M * vm) / M_M
         a_s = (f_coup + f_loc + f_e - B_S * vs) / M_S
@@ -486,6 +513,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                resume_vmax_mms=resume_vmax * 1e3,
                f_e_held_max=f_e_held_max, df_held_max=df_held_max,
                f_e_held_swing=f_e_held_swing,
+               n_adverse=n_adverse, n_force_cue=n_force_cue,
+               op_rate_end=op_rate, t_op_end=t_op,
                f_e_held_dose=dose_held, secs_held=secs_held,
                mismatch_release_mm=mismatch_release * 1e3,
                depth_held_max_mm=depth_held_max * 1e3,

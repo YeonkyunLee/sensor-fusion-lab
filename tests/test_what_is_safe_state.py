@@ -135,9 +135,16 @@ def test_a_reacting_operator_is_what_actually_reduces_the_lunge():
 
 
 def test_the_reaction_rule_does_not_destabilise_the_human_loop():
-    """exp 50 이 폐기한 '이득 있는 시각 폐루프'와 달리 목표를 얼려두는 규칙이라 발산하지 않는다."""
-    s = s59.sweep(seeds=3, grip=True, react=True)
+    """exp 50 이 폐기한 '이득 있는 시각 폐루프'와 달리 목표를 얼려두는 규칙이라 발산하지 않는다.
+
+    **exp 62 에서 술자의 내부 시계를 고친 뒤 조건이 하나 붙었다.** 손을 멈춘 술자는 과제를
+    진행하지 않으므로 얼어 있는 동안 시계도 멈춘다(그게 물리적으로 맞다). 그러면 이 사슬의
+    표준 길이 4 초에서는 **과제가 완주되지 않고**(44.5 mm), 잘린 궤적이 진동 지표를 부풀린다.
+    완주하는 조건에서 재야 한다 — exp 56 의 R18 이 여기에도 걸린다.
+    """
+    s = s59.sweep(seeds=3, grip=True, react=True, steps=3 * jc.STEPS)
     assert s["n_div"] == 0
+    assert s["final"] > 45.0, f"완주 확인 {s['final']:.1f} mm"
     assert np.isfinite(s["osc"]) and s["osc"] < 2.0, f"진동 {s['osc']:.2f} mm"
 
 
@@ -145,13 +152,23 @@ def test_the_reaction_rule_does_not_destabilise_the_human_loop():
 # 합친 정책
 # --------------------------------------------------------------------------- #
 def test_the_recommended_combination_keeps_exp58_properties():
-    """붙들기 + 술자 반응 — 맹행을 늘리지 않고 복귀만 줄이며, 수동성·완주 유지."""
-    base = s59.sweep(seeds=3, grip=True)
-    best = s59.sweep(seeds=3, grip=True, react=True)
+    """붙들기 + 술자 반응 — 맹행을 늘리지 않고 복귀만 줄이며, 수동성·완주 유지.
+
+    복귀 돌진은 시드 분산이 커서(47~192 mm/s) **짝지어** 봐야 한다. 중앙값 대 중앙값으로 보면
+    3 시드에서 부호가 뒤집힌다 — exp 62 가 같은 함정에 다시 빠져서 확인한 사실이다.
+    """
+    long = 3 * jc.STEPS
+    base = s59.sweep(seeds=6, grip=True, steps=long)
+    best = s59.sweep(seeds=6, grip=True, react=True, steps=long)
     assert best["blind"] <= base["blind"] * 1.15
-    assert best["vres"] < base["vres"]
     assert best["e_min"] >= -1e-12, "국소·소산 추가라 채널 장부를 건드리지 않아야 한다"
-    assert best["final"] > 40.0
+    assert best["final"] > 45.0
+    fx = np.array([s59.run(seed=s, grip=True, react=False, steps=long)["resume_vmax_mms"]
+                   for s in range(12)])
+    rc = np.array([s59.run(seed=s, grip=True, react=True, steps=long)["resume_vmax_mms"]
+                   for s in range(12)])
+    assert np.median(rc - fx) < 0.0
+    assert int((rc < fx).sum()) >= 8
 
 
 def test_run_is_reproducible():

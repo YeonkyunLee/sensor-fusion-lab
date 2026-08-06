@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-61 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+62 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -126,6 +126,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 59 | **is stopping a safe state?** (#58's two admissions) | both were **model** problems, not control problems: the chain's tissue model has no post-puncture elasticity, so "holding while the patient moves" produces 0.12 N of force swing where a stick-slip grip term produces 1.62 N (**14×**) — you cannot compare policies a model cannot express. And locking the master makes resumption **worse** because it hides the very cue the operator would react to |
 | 60 | **is that measurement worth making?** (before going to measure it) | **no** — across every plausible clinical exchange rate the decision is unchanged, so the binding unknown was never the tissue. Worse, #59's stated flip condition was **backwards**: retraction drags against the same grip, so a stronger grip makes retracting worse. And the grip **saturates at K_grip × relative motion** — above that the parameter is neither harmful nor identifiable, so **the reason it cannot be measured is the reason it does not matter** |
 | 61 | **tissue relaxes** (the physics #60 admitted it was missing) | **both my predictions were wrong**, which is the result. Dose did not flip #60's verdict, and the amplitude ladder cannot falsely converge — at fixed frequency more amplitude is also more velocity, so every ceiling but `F_slip` rises with it. What relaxation actually breaks is the *intercept*: `F_cut + min(F_slip, K·v·τ)`, so a slow insertion measures the **speed**. And the control found that #60's peak metric reads **2.17 N with the patient perfectly still**, identical for every tissue — it was measuring the stop controller |
+| 62 | **an operator who feels, learns and backs off** (#59's three admissions) | #50 built wave variables to *transmit* force and then modelled an operator who never used it — twelve experiments sending force to someone who could not feel it. At the chain's usual 4 s the tier ladder looks like a clean win (resume 120 → 41 mm/s) but **depth falls 50.3 → 34.7 mm**: my own operator model broke **R18**, the rule #56 wrote at almost exactly that number. Given time to finish, force perception buys **reliability, not magnitude** — improving seeds 8/12 → **11/12**, rescuing 3 of the 4 seeds visual reaction alone lost |
 
 ## Experiments
 
@@ -1905,6 +1906,12 @@ So: **an operator-side measure cannot be evaluated with a non-adaptive operator 
 The recommended combination is **hold + a reacting operator** — blind travel 1.80 mm, resume 68 mm/s,
 passivity and task completion unchanged.
 
+- **Corrected by #62.** The reaction rule froze the operator's *hand* while the underlying intent kept
+  advancing with wall time — so on release the target had run ahead. #62 made the operator's internal clock
+  stop while frozen, which is what "the surgeon paused" actually means. The conclusion survives (paired
+  over 12 seeds, 120 → 66 mm/s, 8/12 improved) but the numbers moved, and at this chain's usual 4 s the
+  rule now leaves the task **incomplete** (44.5 mm) — which is #56's R18 applying to #59 in hindsight, so
+  the figures above should be read in the completion-matched condition #62 uses.
 - Honest scope: **the §B verdict rests directly on grip parameters that are order-of-magnitude guesses, not
   measurements** — so the claim is not "holding is right" but "which tissue you are in decides it". The grip
   is axial 1-DOF where real interaction adds circumferential grip, lateral support and viscoelasticity
@@ -2026,6 +2033,70 @@ confounding set grew by one, and the two wrong answers are equally plausible.
 
 ![tissue relaxes](assets/61_tissue_relaxes.png)
 
+### 62. An operator who feels, learns and backs off (`scripts/62_adaptive_operator.py`)
+#59 showed the sign of an operator-side measure flips with the operator model, and wrote the rule:
+**an operator-side claim can only be evaluated against an operator that adapts.** It then listed three
+things its own operator lacked — **force perception, learning, reversal**. With the tissue side closed
+by #60 and #61, this is the last modelling gap on this track.
+
+One of those omissions was strange in hindsight. **#50 built wave variables to *transmit* force and then
+modelled an operator who never used it.** For twelve experiments this chain was sending force to someone
+who could not feel it.
+
+**A. The tier ladder — and my own rule catching me.** Each tier adds exactly one thing to the last:
+fixed impedance (#50) → visual reaction (#59) → **force perception** → **learning** (move-and-wait: an
+internal clock that slows after each adverse event) → **reversal** (pull back rather than freeze). At the
+chain's usual 4 s the ladder looks like a clean win — resume peak **120 → 41 mm/s**. But depth reached
+falls **50.3 → 34.7 mm** against a 55 mm target. #56 found almost exactly that number, discovered its
+test *could not fail*, and wrote **R18**: report a robustness result only where the task completes, with
+the completion measure beside it. **My own operator model broke my own rule.** A cautious surgeon was not
+buying safety; they were not finishing.
+
+**B. Given time to finish — and I was wrong again, the same way as before.** With 3× the time every tier
+completes (~50.2 mm). On 6-seed medians the story read "force perception adds nothing". It does not: this
+metric is *noisy* (47–192 mm/s in one condition), and **#59 had already caught me comparing medians of
+medians on this exact quantity.** Paired by seed over 12 seeds:
+
+| operator | paired Δ vs T0 | seeds improved |
+|---|--:|--:|
+| + visual reaction | −29.7 mm/s | 8/12 |
+| + force perception | −34.6 mm/s | **11/12** |
+| + learning | −32.3 mm/s | 9/12 |
+| + reversal | **−60.9 mm/s** | 11/12 |
+
+**Force perception buys reliability, not magnitude.** Per seed the mechanism is exact: visual reaction
+alone loses on 4 seeds, and force perception **rescues 3 of them**; on the 5 seeds where visual already
+won, the two are **bit-identical** — the force cue never became the binding one. A redundant cue on a
+*different physical channel* does not raise the ceiling, it removes the cases where the first cue misses.
+That is the same logic as this repo's independent-cross-check habit, now inside the operator.
+
+Learning adds nothing once the task has to finish — and at 4 s it was the thing that stopped it
+finishing. **Reversal is the largest single gain**, and its cost is *not* blind travel (paired, −0.04 mm):
+it is **+3 interruptions (10/12)** and **+0.33 N of held tissue force (7/12)**, because backing off widens
+the hand-to-tool gap that triggered the rule, so the rule fires again. Freezing has no such feedback.
+
+**C. #59's master-lock verdict, re-run against all five operators.** Locking is worse in every tier
+(paired Δ +19 to +40 mm/s), while genuinely reducing the mismatch at release. **My prediction failed
+here too**: I expected a force-perceiving operator to be rescued by the lock, since the lock's own
+resistance is itself a cue — and I made the felt force include it, so the test was fair. It does not
+help. The lock does not remove the operator's intent, it stores it in the hand. Honest caveat, as in #59:
+this holds on about two-thirds of seeds, not all.
+
+**D. The human sits outside the passivity proof.** #56–#58 found the proof covered only the wave block
+and that the term outside it was load-bearing; the operator is another such term, and now a *feedback*
+one. Channel energy stays non-negative in every tier — because these reactions are **rules** (freeze the
+target, retract it), not gains. #50 discarded a gain-carrying visual loop precisely because the human
+loop diverged. **The boundary is not whether the human reacts, but the form of the reaction.**
+
+- Honest scope: the operator is still a model — one perception threshold, one learning scalar, one fixed
+  reversal distance; a real surgeon builds a predictive model and switches strategy. Learning is entered
+  as a slowed internal clock, a first-order stand-in for move-and-wait, where the real thing is
+  *segmented* move-then-wait. The completion comparison assumes **time is free**, which for a real
+  procedure is another declared number this repo does not have. Force perception is a magnitude threshold
+  only; people also react to force *rate*. And the passivity ledger is still the wave block's.
+
+![an adaptive operator](assets/62_adaptive_operator.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -2099,6 +2170,7 @@ python scripts/58_stop_when_lost.py          # stop when the link is lost: repla
 python scripts/59_what_is_safe_state.py      # is stopping safe? the model had to be fixed before asking
 python scripts/60_measure_to_decide.py       # is that measurement worth making? (no) + the protocol if it ever is
 python scripts/61_tissue_relaxes.py          # tissue relaxes: does #60's protocol - or its verdict - survive?
+python scripts/62_adaptive_operator.py       # an operator who feels, learns and backs off - what survives completion?
 pytest -q
 ```
 
@@ -2171,6 +2243,7 @@ scripts/
   59_what_is_safe_state.py      hold vs retract, and the operator side: model expressiveness first
   60_measure_to_decide.py       value of information, confounding, and an excitation ladder
   61_tissue_relaxes.py          viscoelasticity vs #60: two failed predictions, two metric defects
+  62_adaptive_operator.py       force perception, learning, reversal - and my own R18 violation
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
