@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-63 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+64 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -119,7 +119,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 52 | **probing the prior** (sub-surface observation) | a deformation mode leaving 0.03 mm at the surface costs 3.5 mm at depth; the surface gate is chance (AUROC 0.52), one depth check is 0.81 — the first observations buy knowing, not fixing |
 | 53 | **when measuring changes what you measure** | probe pressure is a bias, so 32× more data does not remove it (its share grows 13% → 31%); with the check made by the same sensor the gate falls 0.73 → 0.61 and no remedy lifts it |
 | 54 | **closed-loop needle steering** (closes #48's open loop) | an ablation shows the tip measurement buys **nothing** — the gain was a better default; switching actuation so you can correct *again* is what works (p90 0.98 → 0.37 mm) |
-| 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **no surface residual**, so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it |
+| 55 | **correspondence search** (removes #51–54's last given) | tangential slide leaves **almost no surface residual** (0.92 → 1.17 mm while the correspondence error triples), so finding correspondences costs 2.6× (0.54 → 1.41 mm) and none of point-to-plane, landmarks or robust kernels recovers it. *(#64 corrects the original wording, "no trace at all": 27% is not zero, and scored as a detector the residual reaches AUROC 0.94)* |
 | 56 | **a jittery, lossy channel** (removes #50's constant delay) | nothing happened — because the configuration could not finish the task; once it could, the same jitter created **860×** the energy, in the drift-correction term the passivity proof never covered |
 | 57 | **bursty loss + a heavy delay tail** (removes #56's symmetry) | my prediction was wrong: holding a stale command is **self-limiting**, and the term #56 called a defect is the **brake**. What actually broke is buffer sizing — a playout deadline manufactures loss the network never had (41% at p50) |
 | 58 | **stop when the link is lost** (fixes what #57 exposed) | ablation shows the bound was accidental — blind travel spreads **2.1 → 28.9 mm** depending on which term survives. A local stop triggered by the *declared clinical margin* collapses that to **1.2 → 2.8 mm** and the task still completes; then #57's failed remedy stops being harmful (**R20 verified**) |
@@ -128,6 +128,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 61 | **tissue relaxes** (the physics #60 admitted it was missing) | **both my predictions were wrong**, which is the result. Dose did not flip #60's verdict, and the amplitude ladder cannot falsely converge — at fixed frequency more amplitude is also more velocity, so every ceiling but `F_slip` rises with it. What relaxation actually breaks is the *intercept*: `F_cut + min(F_slip, K·v·τ)`, so a slow insertion measures the **speed**. And the control found that #60's peak metric reads **2.17 N with the patient perfectly still**, identical for every tissue — it was measuring the stop controller |
 | 62 | **an operator who feels, learns and backs off** (#59's three admissions) | #50 built wave variables to *transmit* force and then modelled an operator who never used it — twelve experiments sending force to someone who could not feel it. At the chain's usual 4 s the tier ladder looks like a clean win (resume 120 → 41 mm/s) but **depth falls 50.3 → 34.7 mm**: my own operator model broke **R18**, the rule #56 wrote at almost exactly that number. Given time to finish, force perception buys **reliability, not magnitude** — improving seeds 8/12 → **11/12**, rescuing 3 of the 4 seeds visual reaction alone lost |
 | 63 | **harm is not force** (the gap #61 said the chain could not see) | every harm number this chain ever produced was a **force** — increment, peak swing, dose, three swaps on one axis. Scoring irrecoverable **tissue drag** instead: my prediction that retracting would win was **wrong** (it drags 5 mm itself), but **#60's verdict turns out to be axis-conditional**. Force swing is flat at 2.125 N across the whole slip-limit range while drag falls 9.18 → 6.49 mm, and on that axis **the policy winner flips with `F_slip`** — a stronger grip is *protective*, the opposite sign |
+| 64 | **can anything see what the residual cannot?** (#55's open item, 9 experiments old) | the item was open because of **a sentence, not a number**. #55's own table shows the residual rising 0.92 → 1.17 mm — insensitive, not blind — while the prose said "no trace at all". Scored properly as a detector across a realistic mix, the **residual reaches AUROC 0.94** and the proposed replacement (independently fitted patches) reaches **0.76**, with ρ = 0.47 between them: not even a separate axis. **A negative result that closes the item** |
 
 ## Experiments
 
@@ -1533,7 +1534,14 @@ surface.
 | 8 mm | **1.53 mm** | **1.17 mm** | 94% |
 
 The correspondence error tracks the slide; the measurable residual barely moves. **What can be seen is
-recovered well, and what cannot leaves no trace at all.**
+recovered well, and what cannot leaves almost no trace.**
+
+> **Corrected by #64.** This paragraph originally read *"leaves no trace at all"*, and that overstatement
+> kept an open item alive for nine experiments. The table above says 27%, not zero: **insensitive is not
+> blind.** Scored as a detector across a realistic mix of visible and invisible deformation, the surface
+> residual reaches **AUROC 0.94** — better than the replacement #55 proposed. The right conclusion from
+> this section is that the *correction* cannot recover the tangential part, not that the *alarm* cannot
+> see it.
 
 **Finding correspondences costs 2.6×** — 0.54 mm with ground truth, 1.41 mm with nearest point (over 10
 seeds, deep-target error). That is the size of the assumption #51–#54 were carrying. And the three
@@ -2153,6 +2161,53 @@ shared axis, not of being right.**
 
 ![harm is not force](assets/63_harm_is_not_force.png)
 
+### 64. Can anything see what the residual cannot? (`scripts/64_residual_free_detection.py`)
+#55 ended by naming the next move: *"detect wrong correspondences without going through the residual —
+by checking whether independently matched subsets agree, the same idea as the multi-start consistency in
+#11 and #15."* It stayed open for nine experiments. **It was open because of a sentence, not a number.**
+
+**The idea.** Split the surface around the craniotomy into K sectors, fit a correction from each sector
+alone, and measure how far their predictions disagree at the deep targets. Each sector has a different
+local invariance direction, so tangential error should leak out as disagreement even where the residual
+stays flat.
+
+**The control comes first** (R26, from #61): a correction fitted from one sector is ill-conditioned at
+depth, so the sectors may disagree **even with perfect correspondences** — in which case the statistic
+measures conditioning, not misregistration. #55 carries ground-truth correspondences, so the control is
+free. It matters: with true correspondences the disagreement floor is **0.59 mm**, so an absolute
+threshold would have read conditioning as error.
+
+**I then set myself a test that could not fail.** Varying *only* the tangential component, the residual
+scored **AUROC 1.00** — with one varying factor, anything correlated with it is perfect. That is #56's
+"a test that cannot fail", now in a detection experiment. Making the task real means varying the normal
+component independently too, so the residual moves for **harmless** reasons as well (a large but
+well-corrected surface deformation).
+
+**The result is a negative, and it corrects #55's headline.**
+
+| statistic | AUROC |
+|---|--:|
+| surface residual | **0.94** |
+| subset agreement | 0.76 |
+| agreement ÷ residual | 0.65 |
+
+#55's own table shows the residual going 0.92 → 1.17 mm as the correspondence error triples — a 27% rise
+that the prose rendered as *"leaves no trace at all"*. **Insensitive is not blind.** Reproduced here
+(0.90 → 1.09 mm) and scored as a *ranking* statistic, it is the best detector available. The proposed
+replacement is worse, and with ρ = 0.47 between them it is not even a distinct axis in #63's sense. Note
+this is a different failure from #52's surface gate at AUROC 0.52 — there the deep mode left **no**
+surface signature; here the tangential slide leaves a faint one.
+
+So the item closes as **"the detector we already had is better than the phrase suggested"** — and finding
+that out required measuring an AUROC rather than re-reading a sentence.
+
+- Honest scope: sector splitting can only work where the geometry around the window is asymmetric. On a
+  locally symmetric surface every sector slides the same way and they **agree on the same wrong answer** —
+  that is #52's genuine unobservability, which no detector fixes. One real MR surface, one window. And
+  detection is an alarm, not a correction: knowing the registration is wrong does not say what to do.
+
+![residual-free detection](assets/64_residual_free_detection.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -2228,6 +2283,7 @@ python scripts/60_measure_to_decide.py       # is that measurement worth making?
 python scripts/61_tissue_relaxes.py          # tissue relaxes: does #60's protocol - or its verdict - survive?
 python scripts/62_adaptive_operator.py       # an operator who feels, learns and backs off - what survives completion?
 python scripts/63_harm_is_not_force.py       # harm as deformation, not force - the axis the chain could not see
+python scripts/64_residual_free_detection.py # can independently fitted patches see what the residual cannot?
 pytest -q
 ```
 
@@ -2302,6 +2358,7 @@ scripts/
   61_tissue_relaxes.py          viscoelasticity vs #60: two failed predictions, two metric defects
   62_adaptive_operator.py       force perception, learning, reversal - and my own R18 violation
   63_harm_is_not_force.py       irrecoverable tissue drag: a fourth metric on a different axis
+  64_residual_free_detection.py subset agreement vs the surface residual, scored as a detector
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
