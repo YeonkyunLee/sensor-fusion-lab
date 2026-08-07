@@ -246,6 +246,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     log = dict(t=[], xm=[], xs=[], fe=[], fm=[], e_ch=[], e_sys=[], beta=[],
                starved=[], held=[])
     e_sys_in = e_sys_out = 0.0       # exp 50 식 시스템 에너지 수지(비교용)
+    e_ctrl = e_ctrl_max = 0.0        # 제어기 **전체**가 두 몸체에 해 준 일(exp 65)
+    e_ctrl_nd = e_ctrl_nd_max = 0.0  # 같은 것에서 항상 소산인 국소 감쇠를 뺀 것
     n_att = 0
     beta_sum = 0.0
     diverged = False
@@ -488,6 +490,19 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             f_ml = K_HOLD * (xm_hold - xm) - D_HOLD * vm
         f_ml_prev = f_ml
 
+        # ---- 제어기 **전체**의 에너지 장부 (exp 65) ----
+        # 위의 e_ch 는 **파동 블록**만 감싼다 — 56~64 가 아홉 실험 동안 "장부는 그 블록만 덮는다"고
+        # 적어 왔지만, 정작 **제어기 전체가 수동인가**는 아무도 안 물었다. 여기서 센다:
+        # 제어기가 두 기계 몸체에 **해 준 일**의 누적. 내부 전원이 없는(수동) 제어기라면 초기
+        # 저장량을 넘어 공급할 수 없으므로 이 값이 위로 유계여야 한다. 자라면 **에너지를 만든 것**이다.
+        p_ctrl = (f_m_ch + f_vf + f_ml) * vm + (f_coup + f_loc) * vs
+        e_ctrl += p_ctrl * DT
+        e_ctrl_max = max(e_ctrl_max, e_ctrl)
+        # f_loc 은 항상 소산(-D_S·vs)이라 위 합계를 **관대하게** 만든다 — exp 50 의 시스템 장부가
+        # 위반을 못 본 것과 같은 이유(R17). 그 항을 뺀 장부도 같이 둬서 둘을 비교한다.
+        e_ctrl_nd += (p_ctrl - f_loc * vs) * DT
+        e_ctrl_nd_max = max(e_ctrl_nd_max, e_ctrl_nd)
+
         am = (f_h + f_m_ch + f_vf + f_ml - B_M * vm) / M_M
         a_s = (f_coup + f_loc + f_e - B_S * vs) / M_S
         vm += am * DT
@@ -523,6 +538,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                n_adverse=n_adverse, n_force_cue=n_force_cue,
                op_rate_end=op_rate, t_op_end=t_op,
                f_e_held_dose=dose_held, secs_held=secs_held,
+               e_ctrl_max=e_ctrl_max, e_ctrl_nd_max=e_ctrl_nd_max, e_ctrl_end=e_ctrl,
                drag_held_mm=drag_held * 1e3,
                drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,

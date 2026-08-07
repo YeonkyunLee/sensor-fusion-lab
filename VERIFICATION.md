@@ -1,7 +1,7 @@
 # Verification & risk analysis — the image-guided targeting chain
 
 This document applies **medical-device engineering practice** (requirements → hazard analysis →
-mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–64.
+mitigation → objective evidence → residual risk) to the image-guided chain built in experiments 39–65.
 It is an engineering exercise on a personal research lab, written because in this domain an algorithm
 is only half the work: the other half is being able to say *what could go wrong, what stops it, and
 what evidence exists that it does*.
@@ -42,7 +42,9 @@ plus learning and reversal — where R18 caught the author and the paired-statis
 `63_harm_is_not_force.py` (adding a harm axis that is not force, which left the policy verdict standing
 but showed #60's information-value verdict was a statement about the force axis rather than the tissue),
 `64_residual_free_detection.py` (re-scoring #55's "the residual sees nothing" as a detector, and finding
-the item had stayed open on the strength of a phrase rather than a number).
+the item had stayed open on the strength of a phrase rather than a number),
+`65_whole_loop_passivity.py` (measuring the sentence #56–#64 all wrote and none tested — whether the
+controller as a whole is passive; it is not, while the ledger they watched read exactly zero).
 
 ## 2. Requirements (verifiable)
 
@@ -77,6 +79,7 @@ the item had stayed open on the strength of a phrase rather than a number).
 | R27 | Where a safety cue can be missed, a **redundant cue on a different physical channel** shall be provided, and its value shall be reported as reliability (seeds rescued) rather than as magnitude | visual reaction alone improves the resume peak on 8/12 seeds; adding force perception takes that to **11/12**, rescuing 3 of the 4 seeds it lost, and leaving the already-winning seeds bit-identical | `test_force_perception_buys_reliability_not_magnitude`, `test_force_perception_actually_fires`, `test_visual_reaction_is_real_but_not_universal` |
 | R28 | A harm shall be scored on **more than one physical axis**, and a conclusion shall be stated as conditional on the axis unless it holds on all of them | three force metrics (increment, swing, dose) correlate 0.48–0.81 with each other and −0.23 to 0.15 with irrecoverable tissue drag; on the force axis the held swing is flat at 2.125 N across slip limits 0.4–6.4 N while drag falls 9.18 → 6.49 mm and the policy winner flips | `test_drag_is_a_different_axis_not_a_third_force_metric`, `test_force_swing_is_flat_in_the_slip_limit_but_drag_is_not`, `test_on_the_drag_axis_the_policy_winner_flips_with_the_slip_limit` |
 | R29 | A claim that a quantity is **uninformative** shall be supported by a detector score on a task that can be failed, not by the size of its variation | the surface residual moves only 27% while the correspondence error triples, but scored as a ranking statistic over independently drawn visible and invisible deformation it reaches **AUROC 0.94**; the proposed replacement reaches 0.76 | `test_the_residual_is_insensitive_not_blind`, `test_subset_agreement_does_not_beat_the_residual`, `test_varying_only_the_target_makes_the_task_unfailable` |
+| R30 | A passivity claim shall be evidenced by a ledger spanning **every block between the two physical ports**, evaluated on the worst run rather than the median | the wave-block ledger reads 0.0000 mJ while the whole controller creates 77–106 mJ (worst seed); at ±40 ms the median hides a −6.44 mJ violation present in half the seeds | `test_the_wave_block_is_passive_while_the_whole_controller_is_not`, `test_tdpa_fixes_the_ledger_it_watches_and_not_the_energy`, `test_the_ledger_is_an_upper_bound_not_an_endpoint` |
 
 ## 3. Hazard analysis
 
@@ -125,17 +128,18 @@ must be redone, **S1** reduced accuracy within tolerance. Likelihood is judged *
 | H37 | A noisy metric is compared median-to-median and the conclusion inverts | The resume peak spans 47–192 mm/s across seeds in one condition; on 6-seed medians force perception read as "no benefit", on 12 seeds paired by seed it is the most reliable tier | S1 | High | Paired-by-seed statistics adopted as the primary presentation (difference median **and** seeds improved), seeds raised to 12, medians kept only for populating tables | `test_force_perception_buys_reliability_not_magnitude`, `test_reversal_costs_interruptions_not_blind_travel`, `test_master_lock_still_loses_in_every_operator_model` | **Second occurrence of the same defect**: #59 caught it on this exact quantity and #62 repeated it, this time flipping the *sign* of a conclusion rather than only its size. It also produced a second wrong claim — that reversal's cost is blind travel (paired: −0.04 mm, not a cost at all; the real costs are +3 interruptions and +0.33 N of held force). A rule recorded once was not enough; the paired comparison is now built into the experiment's own helper rather than applied by memory. |
 | H38 | Every metric available to score a hazard lies on **one physical axis**, so the family agrees with itself while being blind in the same direction | Increment, peak swing and dose are all forces; #59–#62's tissue-side conclusions all rest on them. During steady slip the force is pinned at `F_slip` while the tissue keeps being dragged — force constant, damage accruing | S3 | High | A second axis added: irrecoverable tissue drag (total grip-anchor travel, counted only over held intervals), scored alongside the three force metrics and checked for rank independence | `test_force_is_pinned_while_the_tissue_keeps_being_dragged`, `test_relaxation_drags_the_tissue_with_no_tool_motion_at_all`, `test_drag_is_a_different_axis_not_a_third_force_metric` (force↔force 0.48–0.81, force↔drag −0.23 to 0.15), `test_drag_is_not_just_a_proxy_for_held_time` | The policy verdict did **not** flip — retraction drags 5 mm by itself, so holding still wins on drag too, and the author's prediction that this was where it would flip was wrong. What flipped is **H32's information-value verdict**, which turns out to have been a statement about the force axis rather than about the tissue: force swing is flat to three decimals across the slip-limit range while drag falls and the winner changes between 0.8 and 1.6 N. The sign inverts too — a stronger grip is **protective** in deformation. The four metrics also split 2–2 on the policy, so adding an axis did not resolve the disagreement #61 found within the force family; it showed the disagreement was never about noise. **Ischaemic time remains unmeasured**: perfusion is a pressure field and this is a 1-DOF axial model, so one non-force axis is open and others are not. |
 | H39 | A qualitative phrase substitutes for a measurement and an item stays open on the strength of the wording | #55 reported the surface residual rising 0.92 → 1.17 mm under a tripling correspondence error and wrote "leaves no trace at all"; that sentence, not the number, motivated nine experiments' worth of "a residual-free detector is needed" | S1 | Med | The claim re-scored as a detector — AUROC over trials with the visible (normal) and invisible (tangential) deformation drawn **independently**, so the residual also moves for harmless reasons — and compared against the proposed replacement, with the ill-conditioning control run first | `test_the_residual_is_insensitive_not_blind` (monotone, +10–60%), `test_subset_agreement_does_not_beat_the_residual` (0.94 vs 0.76), `test_the_two_statistics_are_not_independent_axes` (ρ = 0.47), `test_the_control_shows_a_floor_of_ill_conditioning` (0.59 mm with true correspondences), `test_varying_only_the_target_makes_the_task_unfailable` | The item closes as a **negative**: the detector already in hand is the best one here. Two process points fall out. First, "insensitive" and "blind" are different claims and only the second licenses looking for a replacement — the distinction is invisible until an AUROC is computed, and #52's genuinely blind case (0.52) sits close enough in the text to have blurred them. Second, the detection task itself was initially unfailable: varying only the quantity being detected gave the residual AUROC 1.00, which is R18's problem in a new setting. What is genuinely unfixable stays unfixable: on a locally symmetric surface every sector agrees on the same wrong answer, which is #52's unobservability, and detection remains an alarm rather than a correction. |
+| H40 | A guarantee proved for one block is read as a property of the system, and the ledger enforcing it is kept satisfied while the system is not | #56–#64 scored channel passivity with the wave-block ledger and each wrote that the drift-correction term lay outside it; nobody integrated the work of the controller as a whole | S3 | High | A two-port ledger over every controller force acting on both bodies, `E_ctrl = ∫[(f_m_ch+f_vf+f_ml)·v_m + (f_coup+f_loc)·v_s] dt`, required ≤ 0 from rest, evaluated on the **worst** seed and swept over jitter and the drift gain | `test_the_wave_block_is_passive_while_the_whole_controller_is_not` (0.0000 mJ vs >20 mJ), `test_tdpa_fixes_the_ledger_it_watches_and_not_the_energy`, `test_the_injection_is_not_caused_by_jitter`, `test_the_injection_grows_with_the_drift_gain`, `test_a_purely_dissipative_run_does_not_look_active` | The controller creates **77–106 mJ** — enough to throw the 2 kg tool at 0.28 m/s — while the watched ledger sits at exactly zero. TDPA erases the block's −6.44 mJ violation and leaves the rest, so the fix moved the number being watched rather than the system. The injection is **largest at zero jitter** and scales with λ, which places its source in the drift term rather than the channel; and λ = 24 is precisely what #56 raised the gain to so the task would complete and R18 be satisfied — one experiment's honest fix created this, invisibly to the ledger of the day. #58's stop cuts it 90 → 57 mJ as an unclaimed side effect; #57's λ-gating does not (57 → 60 mJ, blind travel 2.01 → 2.76 mm), failing on the passivity it was nominally aimed at as well as on blind travel. **Active is not unstable** — nothing diverges here — so the residual risk is a missing guarantee and a dependence on human and tissue dissipation, not an observed instability. A passivity-restoring drift design is not attempted. |
 
 ## 4. Traceability summary
 
-- **346 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
-  medical chain (39–64) carries **276** of them, distributed as: kinematics 4, dynamics 3, planar
+- **358 tests, all passing** (`pytest -q`, ~6–11 min depending on cache). Every experiment has at least one test; the
+  medical chain (39–65) carries **288** of them, distributed as: kinematics 4, dynamics 3, planar
   capstone 6, sim-to-real loop 7, Bunny scans 4, UR5 6-DOF core 9, 6-DOF capstone 5, structural gap 6,
   contact 6, flexible needle 7, real anatomy 8, teleoperation 9, deformable registration 12, probing the
-  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15, safe-state question 13, value of the measurement 25, tissue relaxation 20, adaptive operator 13, harm axes 13, residual-free detection 10. The browser demo's core is separately verified headless
+  prior 11, non-ideal modality 12, closed-loop steering 15, correspondence search 10, jittery channel 18, bursty channel 15, loss-of-link stop 15, safe-state question 13, value of the measurement 25, tissue relaxation 20, adaptive operator 13, harm axes 13, residual-free detection 10, whole-loop passivity 12. The browser demo's core is separately verified headless
   (`tests/guided_demo_check.js` via node, skipped when node is absent) so the demo cannot claim an
   ordering the maths does not support.
-- Requirements R1–R29 above each name the tests that verify them; hazards H1–H39 each name the tests
+- Requirements R1–R30 above each name the tests that verify them; hazards H1–H40 each name the tests
   that evidence their mitigation.
 - Every experiment script ends with an explicit **한계·트레이드오프 (limits & trade-offs)** block, and
   README repeats the honest limits per experiment. Those are the inputs to the "residual" column.
@@ -261,9 +265,16 @@ The dominant residual risks are, in order:
   transmitted as a **cumulative** total restores passivity without the de-jitter buffer's latency (which
   raised oscillation 0.21 → 1.60 mm), with the attenuator active 5.7% of the time. ~~Bursty loss and a
   heavy late tail~~ followed in #57, where the aggregate conclusion survived but buffer sizing did not.
-  What remains from that line: a loss model with longer correlation than two-state Gilbert–Elliott,
-  correlated (shared-path) forward and return channels, and a passivity argument for the **whole**
-  controller including the drift-correction term (H24) rather than for the wave block alone.
+  What remains from that line: a loss model with longer correlation than two-state Gilbert–Elliott, and
+  correlated (shared-path) forward and return channels. ~~A passivity argument for the **whole**
+  controller including the drift-correction term (H24) rather than for the wave block alone~~ — **measured
+  in #65, and the answer is that there is none to be had as built** (H40): the whole controller creates
+  77–106 mJ while the wave-block ledger reads 0.0000, the injection is largest at **zero** jitter and
+  scales with the drift gain, and TDPA fixes the block it watches rather than the system. What is now open
+  is narrower and concrete: **a drift-correction design that is passive**, or an explicit argument that the
+  human and tissue supply enough dissipation to cover what it injects. Nothing diverges today, so this is a
+  missing guarantee rather than an observed instability — but every stability statement in #50–#64 should
+  be read as covering the wave block only.
 - ~~A `communication lost -> stop` function that actually enforces the stop (H27)~~ — done in #58: the
   trigger is the **declared clinical margin** (travel accumulated with no fresh sample) rather than a
   network threshold, and enforcement is **local** so it works with the link dead. It collapses the bound's
@@ -315,7 +326,7 @@ The dominant residual risks are, in order:
 
 ## References in this repo
 
-- Experiments and measured numbers: [README](README.md) §39–64
+- Experiments and measured numbers: [README](README.md) §39–65
 - Beginner-oriented walk-through: [LEARNING_PATH.md](LEARNING_PATH.md) stage 8
 - Narrative write-ups: [blog/06](blog/06_surgical_arm_error_budget.md),
   [blog/07](blog/07_sim_to_real_and_real_scans.md)

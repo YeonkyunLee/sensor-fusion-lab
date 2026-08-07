@@ -46,7 +46,7 @@ see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-64 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+65 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -63,7 +63,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -129,6 +129,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 62 | **an operator who feels, learns and backs off** (#59's three admissions) | #50 built wave variables to *transmit* force and then modelled an operator who never used it — twelve experiments sending force to someone who could not feel it. At the chain's usual 4 s the tier ladder looks like a clean win (resume 120 → 41 mm/s) but **depth falls 50.3 → 34.7 mm**: my own operator model broke **R18**, the rule #56 wrote at almost exactly that number. Given time to finish, force perception buys **reliability, not magnitude** — improving seeds 8/12 → **11/12**, rescuing 3 of the 4 seeds visual reaction alone lost |
 | 63 | **harm is not force** (the gap #61 said the chain could not see) | every harm number this chain ever produced was a **force** — increment, peak swing, dose, three swaps on one axis. Scoring irrecoverable **tissue drag** instead: my prediction that retracting would win was **wrong** (it drags 5 mm itself), but **#60's verdict turns out to be axis-conditional**. Force swing is flat at 2.125 N across the whole slip-limit range while drag falls 9.18 → 6.49 mm, and on that axis **the policy winner flips with `F_slip`** — a stronger grip is *protective*, the opposite sign |
 | 64 | **can anything see what the residual cannot?** (#55's open item, 9 experiments old) | the item was open because of **a sentence, not a number**. #55's own table shows the residual rising 0.92 → 1.17 mm — insensitive, not blind — while the prose said "no trace at all". Scored properly as a detector across a realistic mix, the **residual reaches AUROC 0.94** and the proposed replacement (independently fitted patches) reaches **0.76**, with ρ = 0.47 between them: not even a separate axis. **A negative result that closes the item** |
+| 65 | **is the whole controller passive?** (the sentence #56–#64 all wrote and none measured) | **no.** While the wave-block ledger reads exactly **0.0000 mJ**, the controller as a two-port creates **77–106 mJ** — enough to throw the 2 kg tool at **0.28 m/s**. TDPA erases the −6.44 mJ violation in the block it watches and leaves the rest untouched. The injection is **largest at zero jitter** and grows with `λ` — and `λ` is what #56 raised to make its own test honest |
 
 ## Experiments
 
@@ -2208,6 +2209,67 @@ that out required measuring an AUROC rather than re-reading a sentence.
 
 ![residual-free detection](assets/64_residual_free_detection.png)
 
+### 65. Is the whole controller passive? (`scripts/65_whole_loop_passivity.py`)
+From #56 to #64 this chain scored channel passivity with the **wave-block ledger**, and every one of
+those experiments wrote the same line in its limitations: *"this ledger only wraps the wave block; there
+is still no passivity argument for the whole controller including the drift-correction term."* #57 showed
+that outside term was **doing work** (it is the brake); #58 **replaced** that work. Nobody asked whether
+the whole thing is passive.
+
+**How to ask.** Treat the controller as one two-port block — hand at one side, tissue at the other — and
+integrate the work it does on the two mechanical bodies:
+
+```
+E_ctrl(t) = ∫ [ (f_m_ch + f_vf + f_ml)·v_m + (f_coup + f_loc)·v_s ] dt
+```
+
+A block with no internal source cannot deliver more than it received plus what it started with. Starting
+at rest and undeformed, **passivity requires E_ctrl(t) ≤ 0 for all t.** Anything above that is energy the
+controller created. Passivity is an all-runs, all-times property, so this is scored on the **worst seed**,
+not the median — at ±40 ms the median hides the violation in half the seeds.
+
+**The answer is no, and the gap is not subtle.**
+
+| jitter | wave-block ledger (worst) | whole controller (worst) |
+|--:|--:|--:|
+| 0 ms | 0.0000 mJ | **103.4 mJ** |
+| 20 ms (hold-last) | −4.87 mJ | 89.6 mJ |
+| 20 ms (TDPA) | **0.0000 mJ** | 80.7 mJ |
+| 40 ms (hold-last) | −6.44 mJ | 77.4 mJ |
+| 40 ms (TDPA) | **0.0000 mJ** | 80.2 mJ |
+
+**TDPA fixes the ledger it watches and not the energy.** It erases the −6.44 mJ violation and leaves the
+~80 mJ of actual creation exactly where it was — slightly higher, in fact. For scale, 76 mJ would throw
+the 2 kg tool at **0.28 m/s**.
+
+**And it is not a channel phenomenon.** The injection is *largest at zero jitter* (103 mJ) and falls as
+jitter rises. It scales with the drift gain instead — 18 mJ at λ = 3, 94 mJ at λ = 48 — because that term
+is a position servo bolted on **outside the wave-variable energy accounting**, so it is active with or
+without delay. The uncomfortable part: **λ = 3 is #50's gain, at which the tool stops at 34.6 mm, and
+λ = 24 is what #56 raised it to so the task would complete and its test would mean something.** The
+adjustment that made one experiment honest is the adjustment that broke whole-system passivity — and the
+ledger being watched at the time read zero throughout.
+
+**Two existing prescriptions, re-scored on this ledger.** #58's loss-of-link stop cuts the injection
+90 → 57 mJ, which nobody claimed for it — its purpose was bounding blind travel, and chopping the active
+interval short happens to help here too. #57's λ-gating still does not: 57 → 60 mJ while blind travel
+worsens 2.01 → 2.76 mm. That prescription was rejected on blind travel in #57–#58; measured on the
+passivity it was nominally aimed at, it fails there as well.
+
+If #63 found that a family of metrics can share one axis and be wrong together, this is the guarantee
+version: **satisfaction inside the region a proof covers is not evidence about the whole.**
+
+- Honest scope: this measures *whether* the bound is violated, not the frequency content of the leak.
+  `f_loc` is always dissipative and is part of the control law, so including it is right for the system
+  claim but makes the test lenient — the ledger without it is reported alongside (304 mJ), for the same
+  reason #56 wrote R17. Most importantly: **active does not mean unstable.** Nothing diverges in any of
+  these runs; a sufficiently dissipative human and tissue can stabilise an active controller. What is
+  shown is that the guarantee is absent and the system is leaning on that dissipation. A drift-correction
+  design that restores passivity is *not* proposed here — establishing that we were reading a guarantee we
+  did not have is the whole of this experiment.
+
+![whole-loop passivity](assets/65_whole_loop_passivity.png)
+
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
   gain / covariance machinery, now in state space.
@@ -2284,6 +2346,7 @@ python scripts/61_tissue_relaxes.py          # tissue relaxes: does #60's protoc
 python scripts/62_adaptive_operator.py       # an operator who feels, learns and backs off - what survives completion?
 python scripts/63_harm_is_not_force.py       # harm as deformation, not force - the axis the chain could not see
 python scripts/64_residual_free_detection.py # can independently fitted patches see what the residual cannot?
+python scripts/65_whole_loop_passivity.py    # is the WHOLE controller passive, not just the wave block?
 pytest -q
 ```
 
@@ -2359,6 +2422,7 @@ scripts/
   62_adaptive_operator.py       force perception, learning, reversal - and my own R18 violation
   63_harm_is_not_force.py       irrecoverable tissue drag: a fourth metric on a different axis
   64_residual_free_detection.py subset agreement vs the surface residual, scored as a detector
+  65_whole_loop_passivity.py    whole-controller energy ledger: the guarantee covered one block
 src/sensor_fusion/ur5.py       UR5 6-DOF kinematics/Jacobian/IK + dynamics (Lagrangian & RNEA)
 src/sensor_fusion/se3.py       SO(3)/SE(3) exp·log; posegraph3d.py  SE(3) optimizer
 ros2/kalman_fusion/            colcon-buildable ROS2 package (ROS-free core + rclpy-guarded node)
