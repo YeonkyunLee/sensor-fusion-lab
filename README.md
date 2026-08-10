@@ -32,30 +32,30 @@ verification point catches the failures the covariance misses (`guided_demo.html
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-✅ **Just want the transferable part?** → **[CHECKLIST.md](CHECKLIST.md)** — the twenty questions these
-66 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
+✅ **Just want the transferable part?** → **[CHECKLIST.md](CHECKLIST.md)** — the twenty-one questions these
+67 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
 against a regression suite, a benchmark, or a measurement plan. Each item carries the concrete failure that
 produced it, including **the two rules I wrote down and then broke myself**. Start here if you have five minutes.
 
-🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 66 experiments as an
+🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 67 experiments as an
 8-stage study guide (Korean): what question each stage answers, what to run, what to look for, and the
 mistakes beginners hit — no derivations required.
 
 🛡️ **Safety engineering view:** [VERIFICATION.md](VERIFICATION.md) applies medical-device practice to
-the image-guided chain — 31 verifiable requirements, 41 hazards with mitigations traced to the tests that
+the image-guided chain — 32 verifiable requirements, 42 hazards with mitigations traced to the tests that
 evidence them, and an explicit residual-risk statement. (An engineering exercise, not a regulatory
 submission.)
 
 🎯 **What is this for, and how is it different?** → [WHAT_THIS_IS_FOR.md](WHAT_THIS_IS_FOR.md)
 (what the chain is good for, how it differs from the usual portfolio / paper code / product code,
-the ten negatives, and the honest limits).
+the eleven negatives, and the honest limits).
 
 📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-66 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+67 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -72,7 +72,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not → and then building the design that experiment declined to propose, where the guarantee did come back but **not from the term nine experiments had named** — turning that term fully off leaves the injection and loses the task.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not → and then building the design that experiment declined to propose, where the guarantee did come back but **not from the term nine experiments had named** — turning that term fully off leaves the injection and loses the task → and finally asking where the leftover injection actually comes from, which turned out not to be a defect at all: **it is what penetrating tissue costs, and sixteen experiments had been reading a price tag as a fault.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -140,6 +140,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 64 | **can anything see what the residual cannot?** (#55's open item, 9 experiments old) | the item was open because of **a sentence, not a number**. #55's own table shows the residual rising 0.92 → 1.17 mm — insensitive, not blind — while the prose said "no trace at all". Scored properly as a detector across a realistic mix, the **residual reaches AUROC 0.94** and the proposed replacement (independently fitted patches) reaches **0.76**, with ρ = 0.47 between them: not even a separate axis. **A negative result that closes the item** |
 | 65 | **is the whole controller passive?** (the sentence #56–#64 all wrote and none measured) | **no.** While the wave-block ledger reads exactly **0.0000 mJ**, the controller as a two-port creates **77–106 mJ** — enough to throw the 2 kg tool at **0.28 m/s**. TDPA erases the −6.44 mJ violation in the block it watches and leaves the rest untouched. The injection is **largest at zero jitter** and grows with `λ` — and `λ` is what #56 raised to make its own test honest |
 | 66 | **restoring the guarantee** (the design #65 declined to propose) | it comes back — but **not by fixing the term nine experiments named**. An honestly funded energy tank on the drift term reaches passivity at **no capacity**, and turning that term fully **off** still leaves **16 mJ** while the tool stalls at 36.2 mm. Watching the two-port ledger *directly* holds **E_ctrl ≤ 0 on every seed and every time** and still finishes (49.0 mm, above R18). The price is **chatter, 0.16 → 1.76 mm** — and paired at equal depth the harm gain **disappears**: what was bought is the guarantee, not safety margin |
+| 67 | **the leak is the task** (#66's deferred item) | #66 forecast a **wave-transform rewrite**; it was a **gain 6× the wave impedance** (60 vs 10). Match them and the drift-free controller is *exactly* passive — at 27.3 mm. Moving **both** gains over a 42-cell grid, **no cell is both passive and finishing**: every finishing cell costs ≥ 50.8 mJ and ρ(depth, injection) = **0.92**. So #66's observer was not a good point on the curve but a point **off** it — costing more than #66 counted (position error 2.0 → **10.0 mm**) |
 
 ## Experiments
 
@@ -2336,7 +2337,8 @@ entire controller — #65's complaint taken literally.
 | PO/PC → watching the **strict** ledger | **0.0000 mJ** | **1.38 mJ** | **49.0 mm** | 1.76 mm | 80% |
 
 **The guarantee comes back and the task survives** — 49.0 mm is above R18, and `E_ctrl ≤ 0` holds on every
-seed at every time, not on a median. Lowering λ instead cannot buy this: on the λ ladder the *lowest*
+seed at every time, not on a median. (**#67 corrects this sentence**: depth survives, but the master–tool
+position error goes 2.00 → **10.01 mm**. Scoring "the task" by depth alone undercounted the price.) Lowering λ instead cannot buy this: on the λ ladder the *lowest*
 injection among the rungs that actually finish is **80.6 mJ** (λ = 24). There is no rung that is both
 passive and finishing.
 
@@ -2376,9 +2378,88 @@ chatter grew 11× and harm did **not** rise; the third prediction was wrong too.
   chain has declared (#48 corridor 1.25 mm, #45 shaft 2.17 mm) — costing nothing on the harm axis here does
   not make it free where the margin is tighter. And **why 16 mJ survives with the drift term off** — the
   wave-side coupling implementation is not an ideal port — is *measured and not fixed* here; fixing it means
-  rewriting the wave transform.
+  rewriting the wave transform. (**#67 shows that forecast is wrong**: nothing needs rewriting — the arm-side
+  gain was 6× the wave impedance, and matching them is exactly passive at the cost of the task.)
 
 ![restoring passivity](assets/66_passive_drift_correction.png)
+
+### 67. The leak is the task (`scripts/67_the_leak_is_the_task.py`)
+#66 closed with an item it measured and declined to fix: *"why 16 mJ survives with the drift term
+off — the wave-side coupling implementation is not an ideal port — is measured and not fixed here;
+fixing it means rewriting the wave transform."* **That forecast was wrong.** There is nothing to
+rewrite. The wave transform is fine; the **arm-side coupling gain was 6× the wave impedance the line
+assumes** (`d_s` = 60 against `b` = 10). Match them and the drift-free controller is *exactly* passive
+— and the tool stops at 27.3 mm.
+
+**First, the residual is neither the named term nor the channel.** Set λ literally to zero, jitter to
+zero, loss to zero:
+
+| condition | E_ctrl (worst) | wave-block ledger | depth |
+|---|--:|--:|--:|
+| λ = 0, no jitter, no loss | **16.87 mJ** | 0.0000 | 31.4 mm |
+| λ = 0, ±20 ms jitter | 16.26 mJ | 0.0000 | 31.2 mm |
+
+(#66 called tank capacity 0 "the term fully off"; strictly it blocks only the *injecting* direction and
+lets the dissipative half through. This is the real ablation, and it points at the same place.)
+
+**The gain ladder finds it.**
+
+| `d_s` | `d_s`/`b` | E_ctrl | port-identity residual | depth | passive? |
+|--:|--:|--:|--:|--:|:--|
+| 5 | 0.5 | **0.000 mJ** | 10.33 mJ | 18.3 mm | yes |
+| **10 = b** | 1.0 | **0.000 mJ** | 7.95 mJ | 27.5 mm | yes |
+| 20 | 2.0 | 7.77 mJ | 7.77 mJ | 30.2 mm | no |
+| 60 (the chain's) | 6.0 | 16.87 mJ | 14.19 mJ | 31.4 mm | no |
+
+Note the third column: **the instrument that motivated this experiment is not the mechanism.** The
+port identity `F·v = ½(u² − w²)` is violated by ~10 mJ in rows where the ledger is *exactly zero*. It
+measures something real that is not the cause — #66's "a decomposition is a flow, not an attribution",
+one level down. And **closing the port algebraically** (`w = u − √(2b)·v`, which makes the identity
+true by construction) does not buy passivity either: it goes 16.3 → **46.0 mJ** while force error
+worsens 0.39 → **2.43 N**. Half of that prediction was right — transparency is sold — but the guarantee
+was never bought.
+
+**Then move both knobs at once.** Every experiment from #50 to #66 swept one gain at a time, so this
+question had never been asked. Worst-case energy created over a 7×6 grid (4 seeds), with the R18 line
+drawn through it:
+
+| `d_s` \ λ | 0 | 3 | 6 | 12 | 24 | 48 |
+|--:|--:|--:|--:|--:|--:|--:|
+| 10 | **0.00** | 7.55 | 11.21 | 16.01 | 20.73 | 22.96 |
+| 20 | 7.39 | 12.86 | 15.85 | 19.19 | 21.78 | *50.80* |
+| 30 | 11.26 | 15.32 | 17.59 | 20.07 | *64.66* | *62.30* |
+| 45 | 14.39 | 17.25 | 18.84 | *71.31* | *71.02* | *79.76* |
+| 60 | 16.26 | 18.32 | 19.46 | *84.31* | *80.65* | *104.08* |
+| 90 | 18.39 | 25.48 | *91.22* | *96.89* | *104.23* | *192.66* |
+| 150 | 20.63 | *124.41* | *116.64* | *127.42* | *157.97* | *241.20* |
+
+*(italic = the cell reaches R18)*
+
+**No cell is both passive and finishing.** Every one of the 16 finishing cells costs **≥ 50.8 mJ**;
+the cells that do not finish sit at a median of 18.0 mJ; and across the whole grid the rank correlation
+between depth reached and energy created is **ρ = 0.92**.
+
+> **The injection is not a defective term. It is what penetrating costs.** Sixteen experiments hunting
+> for the faulty component were reading a price tag as a defect.
+
+**Which re-reads #66.** The observer reaches *passive and 49.0 mm* — a cell the two gains cannot reach
+at all. It did not find a good place on the trade curve; it stepped **off** the curve. **And it costs
+more than #66 counted**: alongside the chatter #66 reported, the master–tool position error goes
+2.00 → **10.01 mm**. #66 looked at depth alone and wrote "the task survives"; the depth does survive,
+but the tool sits **a centimetre away from where the surgeon put it**.
+
+**The two seeds #66 could not fix are not a gain problem.** Moving to three different operating points
+leaves **the same seeds (6, 11)** violating every time. They are in the low tail of observer duty
+(ranks 1 and 3 of 12) — but that scalar does not predict them: the *lowest*-duty seed is clean.
+
+- Honest limits. "No such cell" is a statement **about this grid** — 42 cells at 4 seeds, nothing
+  between them; with ρ = 0.92 a cell near the boundary would be narrow but is not excluded. The cheaper
+  corner is **cheaper on one axis only**: (20, 48) buys −37% injection at the same depth and pays
+  chatter 0.16 → 0.48 mm and position error 2.00 → 2.40 mm. And why seeds 6 and 11 break is left open —
+  it is a question about *when* the observer's blind steps coincide with demand, which is a time-series
+  question this experiment does not ask.
+
+![the leak is the task](assets/67_the_leak_is_the_task.png)
 
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /

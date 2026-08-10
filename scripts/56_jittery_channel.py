@@ -182,7 +182,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         retract_mm=0.0, master_lock=False, breath_mm=0.0, breath_hz=0.25,
         tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0,
         op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0,
-        drift_mode="raw", tank_max=TANK_MAX, po_strict=False, pc_fmax=PC_FMAX):
+        drift_mode="raw", tank_max=TANK_MAX, po_strict=False, pc_fmax=PC_FMAX,
+        port_mode="legacy", d_s=None):
     """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
@@ -264,6 +265,15 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                   hold=0.0, pc=0.0)
     tank, tank_min, n_tank_dry = 0.0, tank_max, 0   # 에너지 탱크(비어서 시작한다)
     e_pc, n_pc = 0.0, 0                             # PO/PC 가 뽑아낸 양과 가동 스텝
+    # exp 67: **포트 정합 잔차.** 파동 변환의 항등식은 F·v = ½(u² − w²) 이고, 이게 성립해야
+    # 파동 쪽 장부(수동)가 곧 기계 쪽 장부(수동)가 된다. 팔 쪽 포트에서 도착한 u_in 과 실제
+    # 속도로 만든 w_out 을 그대로 넣어 양변의 차를 적산한다 — 0 이 아니면 **그 차이만큼이
+    # 장부 밖에서 드나든 에너지**다. exp 66 이 "표류 항을 꺼도 16 mJ 가 남는다"고만 적고
+    # 넘긴 자리가 여기다.
+    # exp 67: 팔 쪽 결합 이득. 파동 임피던스 b 와 같은 자릿수여야 포트가 닫히는지
+    # 보려고 실행 인자로 뺐다(기본은 지금까지 쓰던 D_S 그대로).
+    ds = D_S if d_s is None else d_s
+    e_port = 0.0
     n_att = 0
     beta_sum = 0.0
     diverged = False
@@ -345,22 +355,31 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             # exp 66: 팔 쪽 결합력을 **파동 몫과 표류 몫으로 쪼개서** 들고 다닌다. exp 65 는
             # λ 를 쓸어서 "주입이 λ 를 따라 자란다"까지만 봤는데, 그건 상관이지 분해가 아니다.
             # 항별로 한 일을 따로 적으면 어느 항이 만드는지 **직접** 나온다.
-            f_wave_s = D_S * vs_cmd
+            f_wave_s = ds * vs_cmd
             f_drift = 0.0
             if lam:
                 # exp 50 이 표류를 잡으려고 얹은 위치 보정. **이 항은 파동 변환 밖**이라 위
                 # 수동성 장부가 보증하지 않는다 — exp 65 에서 결국 물린 자리가 여기다.
                 # lam_gate=True 면 이 항도 같은 예산 신호(β)로 함께 죈다. exp 57 이 "예산은
                 # 파동만 죄므로 도구를 세우지 못한다"를 확인하고 그 처방으로 쓰는 스위치다.
-                f_drift = D_S * lam * (beta_u if lam_gate else 1.0) * (xm_rx - xs)
-            w_out = (b * vs - F_s) / sq
+                f_drift = ds * lam * (beta_u if lam_gate else 1.0) * (xm_rx - xs)
+            if port_mode == "reflect":
+                # exp 67: **대수적으로 닫는 반사파.** w = u − √(2b)·v 로 두면 항등식
+                # ½(u² − w²) = F·v 가 **구성상** 성립한다(F = √(2b)u − b·v). 원래 식은
+                # 실제 (v_s, F_s) 로 만든 w 인데, 도착한 u_in 은 **명령**된 속도에 대응하므로
+                # 추종 오차만큼 양변이 어긋난다 — 그 어긋남이 exp 66 이 남긴 16 mJ 다.
+                w_out = u_in - sq * vs
+            else:
+                w_out = (b * vs - F_s) / sq
+            # exp 67: 이 포트에서 파동 항등식이 실제로 성립하는지 그 자리에서 잰다.
+            e_port += (0.5 * (u_in * u_in - w_out * w_out) - F_s * vs) * DT
             if do_send:
                 e_w_inc = 0.5 * w_out * w_out * t_s
                 e_w_sent += e_w_inc
                 ch_sm.send(k, (w_out,
                                e_w_sent if energy_mode == "cumulative" else e_w_inc, xs))
 
-            f_loc = -D_S * vs * b_scale
+            f_loc = -ds * vs * b_scale
             if drift_mode == "tank":
                 # 재원 적립: 국소 감쇠가 **실제로 버린** 양만 넣는다(f_loc·vs ≤ 0 이므로 부호 반전).
                 tank = min(tank + max(-f_loc * vs, 0.0) * DT, tank_max)
@@ -418,7 +437,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             f_m_ch = -K_C * (xm - xs_rx)
             f_coup = K_S * (xm_rx - xs)
             f_wave_s, f_drift = f_coup, 0.0   # 이 대조군에는 표류 보정 항이 없다
-            f_loc = -D_S * vs * b_scale
+            f_loc = -ds * vs * b_scale
             beta_u = beta = 1.0
 
         # ---- 통신 상실 정지 (exp 58) ----
@@ -624,6 +643,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                e_term=dict(e_term), drift_mode=drift_mode,     # exp 66
                tank_min=tank_min, tank_dry_frac=n_tank_dry / max(steps, 1),
                e_pc=e_pc, pc_duty=n_pc / max(steps, 1),
+               e_port=e_port,                                  # exp 67
                drag_held_mm=drag_held * 1e3,
                drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,
