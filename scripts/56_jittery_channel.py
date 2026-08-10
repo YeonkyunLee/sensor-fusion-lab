@@ -84,6 +84,15 @@ ATT_EPS = 1e-12
 K_HOLD, D_HOLD = 4000.0, 120.0
 # 적응형 술자(exp 62): 학습이 내부 시계를 늦출 수 있는 하한과, 아무 일 없을 때의 회복 속도.
 OP_RATE_MIN, OP_RATE_UP = 0.15, 0.20
+# 표류 보정을 수동으로 만드는 설계(exp 66).
+#  TANK_MAX — 탱크 용량 [J]. 수동성만 따지면 용량은 아무래도 좋지만(≤0 은 어차피 지켜진다),
+#             **용량이 곧 한 번에 쏟을 수 있는 양**이라 안전 성질로는 작을수록 좋다. 기본값은
+#             exp 65 가 잰 주입량(~0.1 J)보다 한 자릿수 작게 두어 "탱크가 큰 게 답"이 되지
+#             않게 한다 — 용량을 쓸어서 그 교환을 직접 보는 것이 exp 66 의 C 절이다.
+#  TANK_EPS — '말랐다'로 셀 임계. 부동소수 잔량에 계수가 매 스텝 걸리지 않게 한다(ATT_EPS 와 같은 사고).
+#  PC_FMAX  — PO/PC 가 한 스텝에 걸 수 있는 감쇠력 상한 [N]. vs→0 에서 초과분을 뽑으려면 힘이
+#             발산하므로 반드시 묶어야 한다. 팔이 내는 힘의 크기(수십 N)와 같은 자릿수.
+TANK_MAX, TANK_EPS, PC_FMAX = 0.010, 1e-12, 50.0
 
 MODES = ("zoh", "zero", "tdpa", "bigb", "pp")
 
@@ -172,7 +181,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         tissue_on=True, b_scale=1.0, estop=False, resume_ms=0.0, blind_mm=1.0,
         retract_mm=0.0, master_lock=False, breath_mm=0.0, breath_hz=0.25,
         tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0,
-        op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0):
+        op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0,
+        drift_mode="raw", tank_max=TANK_MAX, po_strict=False, pc_fmax=PC_FMAX):
     """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
@@ -248,6 +258,12 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     e_sys_in = e_sys_out = 0.0       # exp 50 식 시스템 에너지 수지(비교용)
     e_ctrl = e_ctrl_max = 0.0        # 제어기 **전체**가 두 몸체에 해 준 일(exp 65)
     e_ctrl_nd = e_ctrl_nd_max = 0.0  # 같은 것에서 항상 소산인 국소 감쇠를 뺀 것
+    # exp 66: **항별 분해.** exp 65 는 λ 를 쓸어 "주입이 λ 를 따라 자란다"를 보였는데 그건
+    # 상관이다. 항마다 한 일을 따로 적으면 어느 항이 만드는지가 직접 나온다(합은 e_ctrl).
+    e_term = dict(wave_m=0.0, wave_s=0.0, drift=0.0, loc=0.0, vf=0.0, ml=0.0,
+                  hold=0.0, pc=0.0)
+    tank, tank_min, n_tank_dry = 0.0, tank_max, 0   # 에너지 탱크(비어서 시작한다)
+    e_pc, n_pc = 0.0, 0                             # PO/PC 가 뽑아낸 양과 가동 스텝
     n_att = 0
     beta_sum = 0.0
     diverged = False
@@ -274,6 +290,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     xs_rx = 0.0                                    # 술자가 화면으로 보는 팔 위치(지연된 값)
     for k in range(steps):
         t = k * DT
+        # 항별 분해가 **정확한 분해**로 남으려면(합 = f_coup) 매 스텝 초기화하고, 아래에서
+        # 값을 바꾸는 곳(정지 혼합·PC)마다 항별로 같이 걸어야 한다.
+        f_hold = f_pc_applied = 0.0
         # 환자 움직임: 조직 표면이 움직인다. 상대 침투가 xs − surf − X_SURFACE 가 되므로, 도구를
         # 붙들고 있으면 표면이 다가오는 만큼 그대로 더 박힌다.
         surf = breath_mm * 1e-3 * np.sin(2 * np.pi * breath_hz * t) if breath_mm else 0.0
@@ -323,12 +342,17 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
 
             F_s = -f_e
             vs_cmd = (sq * u_in - F_s) / b
+            # exp 66: 팔 쪽 결합력을 **파동 몫과 표류 몫으로 쪼개서** 들고 다닌다. exp 65 는
+            # λ 를 쓸어서 "주입이 λ 를 따라 자란다"까지만 봤는데, 그건 상관이지 분해가 아니다.
+            # 항별로 한 일을 따로 적으면 어느 항이 만드는지 **직접** 나온다.
+            f_wave_s = D_S * vs_cmd
+            f_drift = 0.0
             if lam:
                 # exp 50 이 표류를 잡으려고 얹은 위치 보정. **이 항은 파동 변환 밖**이라 위
-                # 수동성 장부가 보증하지 않는다 — 이 실험에서 결국 물리는 자리가 여기다.
+                # 수동성 장부가 보증하지 않는다 — exp 65 에서 결국 물린 자리가 여기다.
                 # lam_gate=True 면 이 항도 같은 예산 신호(β)로 함께 죈다. exp 57 이 "예산은
                 # 파동만 죄므로 도구를 세우지 못한다"를 확인하고 그 처방으로 쓰는 스위치다.
-                vs_cmd += lam * (beta_u if lam_gate else 1.0) * (xm_rx - xs)
+                f_drift = D_S * lam * (beta_u if lam_gate else 1.0) * (xm_rx - xs)
             w_out = (b * vs - F_s) / sq
             if do_send:
                 e_w_inc = 0.5 * w_out * w_out * t_s
@@ -336,8 +360,51 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 ch_sm.send(k, (w_out,
                                e_w_sent if energy_mode == "cumulative" else e_w_inc, xs))
 
-            f_coup = D_S * vs_cmd
             f_loc = -D_S * vs * b_scale
+            if drift_mode == "tank":
+                # 재원 적립: 국소 감쇠가 **실제로 버린** 양만 넣는다(f_loc·vs ≤ 0 이므로 부호 반전).
+                tank = min(tank + max(-f_loc * vs, 0.0) * DT, tank_max)
+            # ---- exp 66: 표류 보정을 **수동으로** 만드는 두 설계 ----
+            # 둘 다 exp 65 가 "여기서 제안하지 않는다 — 다음 일이다"로 남긴 자리다.
+            if drift_mode == "tank" and f_drift:
+                # **에너지 탱크.** 표류 항이 조직 쪽으로 일을 하려면 **제어기가 이미 버린
+                # 에너지**에서 꺼내 쓴다. 재원은 국소 감쇠 f_loc 이 소산시킨 몫이다 — exp 65 가
+                # "항상 소산이라 장부를 관대하게 만든다"고 지적했던 바로 그 항이, 여기서는
+                # **정당한 재원**이 된다. 없던 것을 만들지 않고 버린 것을 도로 쓰는 것이니
+                # 두 포트 합계는 여전히 ≤ 0 이다. 비면 그만큼만 쓴다(0 으로 끊지 않는다 —
+                # 끊으면 표류 보정이 on/off 로 덜컹거려 진동이 된다).
+                p_dr = f_drift * vs
+                if p_dr > 0.0:
+                    need = p_dr * DT
+                    if need > tank:
+                        f_drift *= tank / need if need > 0.0 else 0.0
+                        need = tank
+                    tank -= need
+                    n_tank_dry += int(tank <= TANK_EPS)
+                else:
+                    tank = min(tank - p_dr * DT, tank_max)
+            f_coup = f_wave_s + f_drift
+            if drift_mode == "po":
+                # **전체 포트 PO/PC.** 탱크가 한 항만 손보는 것과 달리, 장부(e_ctrl)를 그대로
+                # 감시하다가 양수가 되면 팔 쪽에 가변 감쇠를 걸어 초과분을 그 스텝에 뽑아낸다.
+                # Hannaford–Ryu 의 고전적 처방을 **파동 블록이 아니라 제어기 전체**에 건 것 —
+                # exp 65 의 지적("자기가 재는 블록만 고친다")을 문자 그대로 따른 것이다.
+                # 알려진 약점이 그대로 나온다: vs≈0 이면 감쇠가 뽑을 수 있는 것이 없다.
+                # **어느 장부를 보게 할 것인가**가 이 실험의 D 절이다. 기본은 e_ctrl(국소 감쇠
+                # 포함, exp 65 가 "관대하다"고 한 쪽)이고, po_strict 면 그 항을 뺀 e_ctrl_nd 를
+                # 본다 — exp 65 의 교훈("자기가 재는 블록만 고친다")이 한 층 위에서 반복되는지.
+                watch = e_ctrl_nd if po_strict else e_ctrl
+                if watch > 0.0 and abs(vs) > 1e-9:
+                    f_pc = -watch / (vs * DT)
+                    # 한 스텝에 걸 수 있는 감쇠를 묶는다. 안 묶으면 vs 가 작을 때 발산적인
+                    # 힘이 나와 그 자체가 사고가 된다(수동성을 사고 안정성을 파는 꼴).
+                    f_pc = float(np.clip(f_pc, -pc_fmax, pc_fmax))
+                    if f_pc * vs < 0.0:               # 소산 방향일 때만 건다
+                        f_pc_applied = f_pc
+                        f_coup += f_pc
+                        e_pc += f_pc * vs * DT
+                        n_pc += 1
+            tank_min = min(tank_min, tank)
             beta = min(beta_u, beta_w)
             if beta < 1.0:
                 n_att += 1
@@ -350,6 +417,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             (xs_rx, _, _), fresh_w = ch_sm.recv(k, hold, n_buf)
             f_m_ch = -K_C * (xm - xs_rx)
             f_coup = K_S * (xm_rx - xs)
+            f_wave_s, f_drift = f_coup, 0.0   # 이 대조군에는 표류 보정 항이 없다
             f_loc = -D_S * vs * b_scale
             beta_u = beta = 1.0
 
@@ -420,8 +488,12 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                         stopped, blend, blind_acc = False, 1.0, 0.0
                         resume_win = 100                          # 복귀 후 100 ms 를 관찰한다
                 wgt = min(max(blend, 0.0), 1.0)
-                f_coup = wgt * f_coup + (1.0 - wgt) * (K_HOLD * (x_hold - xs)
-                                                       - D_HOLD * vs)
+                # exp 66: 혼합도 **항별로** 걸어야 분해가 분해로 남는다(합 = f_coup).
+                f_hold = (1.0 - wgt) * (K_HOLD * (x_hold - xs) - D_HOLD * vs)
+                f_wave_s *= wgt
+                f_drift *= wgt
+                f_pc_applied *= wgt
+                f_coup = f_wave_s + f_drift + f_pc_applied + f_hold
                 n_held += 1
             elif resume_win > 0:
                 # 램프 길이와 무관하게 **해제 직후 같은 창**에서 최대 속도를 본다. 램프 구간만
@@ -498,6 +570,16 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         p_ctrl = (f_m_ch + f_vf + f_ml) * vm + (f_coup + f_loc) * vs
         e_ctrl += p_ctrl * DT
         e_ctrl_max = max(e_ctrl_max, e_ctrl)
+        # exp 66: 같은 전력을 **항별로** 나눠 적는다. 합은 위의 p_ctrl 과 정확히 같아야 한다
+        # (test_the_decomposition_is_a_decomposition 이 그걸 확인한다).
+        e_term["wave_m"] += f_m_ch * vm * DT
+        e_term["vf"] += f_vf * vm * DT
+        e_term["ml"] += f_ml * vm * DT
+        e_term["wave_s"] += f_wave_s * vs * DT
+        e_term["drift"] += f_drift * vs * DT
+        e_term["hold"] += f_hold * vs * DT       # exp 58 의 정지
+        e_term["pc"] += f_pc_applied * vs * DT   # exp 66 의 PO/PC
+        e_term["loc"] += f_loc * vs * DT
         # f_loc 은 항상 소산(-D_S·vs)이라 위 합계를 **관대하게** 만든다 — exp 50 의 시스템 장부가
         # 위반을 못 본 것과 같은 이유(R17). 그 항을 뺀 장부도 같이 둬서 둘을 비교한다.
         e_ctrl_nd += (p_ctrl - f_loc * vs) * DT
@@ -539,6 +621,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                op_rate_end=op_rate, t_op_end=t_op,
                f_e_held_dose=dose_held, secs_held=secs_held,
                e_ctrl_max=e_ctrl_max, e_ctrl_nd_max=e_ctrl_nd_max, e_ctrl_end=e_ctrl,
+               e_term=dict(e_term), drift_mode=drift_mode,     # exp 66
+               tank_min=tank_min, tank_dry_frac=n_tank_dry / max(steps, 1),
+               e_pc=e_pc, pc_duty=n_pc / max(steps, 1),
                drag_held_mm=drag_held * 1e3,
                drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,

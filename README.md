@@ -33,29 +33,29 @@ A robot localizes from noisy landmark ranges as a particle cloud spreads over th
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
 ✅ **Just want the transferable part?** → **[CHECKLIST.md](CHECKLIST.md)** — the twenty questions these
-65 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
+66 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
 against a regression suite, a benchmark, or a measurement plan. Each item carries the concrete failure that
 produced it, including **the two rules I wrote down and then broke myself**. Start here if you have five minutes.
 
-🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 65 experiments as an
+🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 66 experiments as an
 8-stage study guide (Korean): what question each stage answers, what to run, what to look for, and the
 mistakes beginners hit — no derivations required.
 
 🛡️ **Safety engineering view:** [VERIFICATION.md](VERIFICATION.md) applies medical-device practice to
-the image-guided chain — 30 verifiable requirements, 40 hazards with mitigations traced to the tests that
+the image-guided chain — 31 verifiable requirements, 41 hazards with mitigations traced to the tests that
 evidence them, and an explicit residual-risk statement. (An engineering exercise, not a regulatory
 submission.)
 
 🎯 **What is this for, and how is it different?** → [WHAT_THIS_IS_FOR.md](WHAT_THIS_IS_FOR.md)
 (what the chain is good for, how it differs from the usual portfolio / paper code / product code,
-the nine negatives, and the honest limits).
+the ten negatives, and the honest limits).
 
 📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-65 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+66 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -72,7 +72,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not → and then building the design that experiment declined to propose, where the guarantee did come back but **not from the term nine experiments had named** — turning that term fully off leaves the injection and loses the task.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -139,6 +139,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 63 | **harm is not force** (the gap #61 said the chain could not see) | every harm number this chain ever produced was a **force** — increment, peak swing, dose, three swaps on one axis. Scoring irrecoverable **tissue drag** instead: my prediction that retracting would win was **wrong** (it drags 5 mm itself), but **#60's verdict turns out to be axis-conditional**. Force swing is flat at 2.125 N across the whole slip-limit range while drag falls 9.18 → 6.49 mm, and on that axis **the policy winner flips with `F_slip`** — a stronger grip is *protective*, the opposite sign |
 | 64 | **can anything see what the residual cannot?** (#55's open item, 9 experiments old) | the item was open because of **a sentence, not a number**. #55's own table shows the residual rising 0.92 → 1.17 mm — insensitive, not blind — while the prose said "no trace at all". Scored properly as a detector across a realistic mix, the **residual reaches AUROC 0.94** and the proposed replacement (independently fitted patches) reaches **0.76**, with ρ = 0.47 between them: not even a separate axis. **A negative result that closes the item** |
 | 65 | **is the whole controller passive?** (the sentence #56–#64 all wrote and none measured) | **no.** While the wave-block ledger reads exactly **0.0000 mJ**, the controller as a two-port creates **77–106 mJ** — enough to throw the 2 kg tool at **0.28 m/s**. TDPA erases the −6.44 mJ violation in the block it watches and leaves the rest untouched. The injection is **largest at zero jitter** and grows with `λ` — and `λ` is what #56 raised to make its own test honest |
+| 66 | **restoring the guarantee** (the design #65 declined to propose) | it comes back — but **not by fixing the term nine experiments named**. An honestly funded energy tank on the drift term reaches passivity at **no capacity**, and turning that term fully **off** still leaves **16 mJ** while the tool stalls at 36.2 mm. Watching the two-port ledger *directly* holds **E_ctrl ≤ 0 on every seed and every time** and still finishes (49.0 mm, above R18). The price is **chatter, 0.16 → 1.76 mm** — and paired at equal depth the harm gain **disappears**: what was bought is the guarantee, not safety margin |
 
 ## Experiments
 
@@ -2278,6 +2279,106 @@ version: **satisfaction inside the region a proof covers is not evidence about t
   did not have is the whole of this experiment.
 
 ![whole-loop passivity](assets/65_whole_loop_passivity.png)
+
+### 66. Restoring the guarantee — and why fixing the named term does not do it (`scripts/66_passive_drift_correction.py`)
+#65 ended with a sentence it deliberately left unpaid: *"a drift-correction design that restores passivity
+is not proposed here — that is the next job."* This is that job. And the obvious way to do it is wrong.
+
+From #56 to #64, nine experiments named the same suspect: the drift-correction term `λ(x_m − x_s)` bolted
+on **outside** the wave transform. #65 swept λ and watched the injection grow 18 → 94 mJ with it. So tie
+that term to an honest energy budget and the guarantee should follow. (#57's β-gating was a crude version
+that borrowed the *wave* budget; this one is funded properly — **a tank the controller may draw only from
+energy it has already thrown away**, the local damper's dissipation. Nothing is created; something
+discarded is re-spent, so the two-port sum must still be ≤ 0.)
+
+**First, decompose.** #65 swept λ and read the correlation; a per-term ledger reads the flow directly
+(seed 0, ±20 ms, TDPA — the sum is exactly `E_ctrl`, which a test pins to 1e-12):
+
+| term | work done |
+|---|--:|
+| wave coupling (arm side) | **+319.5 mJ** |
+| local damper | −256.9 mJ |
+| **drift correction λ** | **+40.6 mJ** |
+| wave force display (hand side) | −26.1 mJ |
+| **sum = whole ledger** | **+77.0 mJ** |
+
+Honestly: **this table cannot name a cause.** The terms cancel against each other and changing λ moves
+`v_s`, so every term moves together. A decomposition is a *flow*, not an attribution. To ask about cause
+you have to turn the term off — which is the next table.
+
+**Gating the named term reaches passivity at no capacity.**
+
+| tank capacity | energy created | depth | oscillation | tank dry | passive? |
+|--:|--:|--:|--:|--:|:--|
+| 0 mJ (term fully **off**) | **16.1 mJ** | **36.2 mm** | 0.29 mm | 89% | no |
+| 0.1 mJ | 21.9 mJ | 36.7 mm | 0.26 mm | 52% | no |
+| 1 mJ | 88.9 mJ | 41.0 mm | 0.71 mm | 43% | no |
+| 3 mJ | 90.7 mJ | 50.3 mm | **6.68 mm** | 28% | no |
+| 10 mJ | 88.6 mJ | 50.8 mm | 0.17 mm | 4% | no |
+| 100 mJ | 80.7 mJ | 50.8 mm | 0.16 mm | 0% | no |
+
+Large capacity never binds — that is *"the constraint did nothing"*, not *"passivity was obtained"*. And at
+capacity zero, with the named term **completely removed**, 16 mJ is still created while the tool stalls at
+36.2 mm, below **R18**'s 45 mm. **The term nine experiments named was not the only source.** #65 swept λ and
+saw a *correlation*; turning it off asks about *cause*, and the two answers differ. As a bonus, the middle
+of the ladder is the worst place to be: at 3 mJ the drift correction switches on and off and **is itself an
+oscillation source** (6.68 mm) — partial gating loses on both axes.
+
+**What works is watching the ledger you are actually claiming.** A passivity observer / controller over the
+*whole* two-port: when `E_ctrl` would go positive, apply a variable damper on the arm side and drain the
+excess in that step. Hannaford–Ryu's classical prescription, applied not to the wave block but to the
+entire controller — #65's complaint taken literally.
+
+| configuration | E_ctrl (worst) | strict ledger (no local damper) | depth | oscillation | duty |
+|---|--:|--:|--:|--:|--:|
+| raw (#65) | 80.65 mJ | 334.0 mJ | 50.8 mm | 0.16 mm | — |
+| PO/PC → watching the **lenient** ledger | 1.13 mJ | 74.0 mJ | 50.5 mm | 0.94 mm | 78% |
+| PO/PC → watching the **strict** ledger | **0.0000 mJ** | **1.38 mJ** | **49.0 mm** | 1.76 mm | 80% |
+
+**The guarantee comes back and the task survives** — 49.0 mm is above R18, and `E_ctrl ≤ 0` holds on every
+seed at every time, not on a median. Lowering λ instead cannot buy this: on the λ ladder the *lowest*
+injection among the rungs that actually finish is **80.6 mJ** (λ = 24). There is no rung that is both
+passive and finishing.
+
+**And #65's lesson repeats one level up, now on the fix.** Point the observer at the lenient ledger and
+that ledger falls to 1.13 mJ while the strict one keeps **74 mJ**. **The fix repairs the ledger it watches**
+— exactly what #65 said about TDPA, now true of the prescription. Point it at the strict ledger and both
+are satisfied, because `E_ctrl ≤ E_strict` always.
+
+**The prescription also has its own failure mode**, and it is not "clamp harder":
+
+| damper clamp | E_ctrl | strict ledger | depth | oscillation |
+|--:|--:|--:|--:|--:|
+| 10 N | 43.6 mJ | 142.8 mJ | 48.2 mm | 3.85 mm |
+| **50 N** | 0.0000 mJ | **1.38 mJ** | 49.0 mm | 1.76 mm |
+| 200 N | 0.0000 mJ | 3.19 mJ | 50.0 mm | 1.43 mm |
+| 5000 N | 0.0000 mJ | **119.9 mJ** | 50.7 mm | 1.41 mm |
+
+Too weak and it cannot drain; too strong and **hitting the system with a large force in one step is itself
+an excitation**, so the strict residual grows 1.4 → 119.9 mJ.
+
+**And for the patient? Paired, the gain disappears.** Scored on #63's irrecoverable-drag axis under the
+chain's worst condition (bursty loss #57 + stop #58 + dragging tissue #63), drag looks like 16.6 → 10.1 mm
+— but the two configurations **stopped at different depths**. Interpolating the λ ladder to the same depth
+(47.0 mm) gives **9.3 mm**: it was *less depth, less damage*. CHECKLIST's "compare paired" caught a boast.
+What survives pairing is one thing — **drag during held intervals, 3.2 → 0.7 mm** (12 seeds) — and even
+that is **fragile**: the same comparison at 3 seeds flips sign, which a test pins deliberately. Meanwhile
+chatter grew 11× and harm did **not** rise; the third prediction was wrong too.
+
+- Honest limits. **The demonstration is on the jitter-only channel.** In the harsh condition above, the
+  strict observer still leaves **2.81 mJ** (vs 95.1 raw) — **2 seeds of 12 violate**, so what holds there is
+  *"97% removed"*, not the guarantee. And **at 6 seeds it reads exactly 0**: #65 met this trap as a median
+  hiding half the seeds, and it returns here as a **sample-size** trap. Passivity is an all-runs property,
+  so it is only true *as far as you looked*. Even on the clean channel it is not "exactly passive" but
+  "**no violation on the ledger being
+  scored**": the strict ledger keeps a 1.38 mJ residual from the force clamp and from steps where `v_s ≈ 0`
+  and a damper has nothing to drain. Chatter at 1.76 mm is the **same order** as the clinical margins this
+  chain has declared (#48 corridor 1.25 mm, #45 shaft 2.17 mm) — costing nothing on the harm axis here does
+  not make it free where the margin is tighter. And **why 16 mJ survives with the drift term off** — the
+  wave-side coupling implementation is not an ideal port — is *measured and not fixed* here; fixing it means
+  rewriting the wave transform.
+
+![restoring passivity](assets/66_passive_drift_correction.png)
 
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
