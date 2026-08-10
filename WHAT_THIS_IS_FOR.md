@@ -157,6 +157,8 @@
 
 ## 읽는 순서
 
+- **5분밖에 없으면** → [CHECKLIST.md](CHECKLIST.md) (도메인 중립 검증 체크리스트 20항목 —
+  로봇을 안 해도 쓸 수 있는 부분만 뽑은 것)
 - **처음이면** → [LEARNING_PATH.md](LEARNING_PATH.md) (8단계, 반복 교훈 19가지)
 - **결과 숫자를 보려면** → [README.md](README.md) (실험별 절 + 그림)
 - **안전공학 관점** → [VERIFICATION.md](VERIFICATION.md) (요구사항·위험·추적성·잔여위험)
