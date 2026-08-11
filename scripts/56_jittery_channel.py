@@ -183,7 +183,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0,
         op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0,
         drift_mode="raw", tank_max=TANK_MAX, po_strict=False, pc_fmax=PC_FMAX,
-        port_mode="legacy", d_s=None):
+        port_mode="legacy", d_s=None, prepay_d=0.0, prepay_stop=None):
     """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
@@ -255,14 +255,14 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     e_u_inc = e_w_inc = 0.0          # 증분 모드에서 이번 패킷에 실어 보낼 몫
 
     log = dict(t=[], xm=[], xs=[], fe=[], fm=[], e_ch=[], e_sys=[], beta=[],
-               starved=[], held=[])
+               starved=[], held=[], e_ctrl=[])
     e_sys_in = e_sys_out = 0.0       # exp 50 식 시스템 에너지 수지(비교용)
     e_ctrl = e_ctrl_max = 0.0        # 제어기 **전체**가 두 몸체에 해 준 일(exp 65)
     e_ctrl_nd = e_ctrl_nd_max = 0.0  # 같은 것에서 항상 소산인 국소 감쇠를 뺀 것
     # exp 66: **항별 분해.** exp 65 는 λ 를 쓸어 "주입이 λ 를 따라 자란다"를 보였는데 그건
     # 상관이다. 항마다 한 일을 따로 적으면 어느 항이 만드는지가 직접 나온다(합은 e_ctrl).
     e_term = dict(wave_m=0.0, wave_s=0.0, drift=0.0, loc=0.0, vf=0.0, ml=0.0,
-                  hold=0.0, pc=0.0)
+                  hold=0.0, pc=0.0, pre=0.0)
     tank, tank_min, n_tank_dry = 0.0, tank_max, 0   # 에너지 탱크(비어서 시작한다)
     e_pc, n_pc = 0.0, 0                             # PO/PC 가 뽑아낸 양과 가동 스텝
     # exp 67: **포트 정합 잔차.** 파동 변환의 항등식은 F·v = ½(u² − w²) 이고, 이게 성립해야
@@ -274,6 +274,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     # 보려고 실행 인자로 뺐다(기본은 지금까지 쓰던 D_S 그대로).
     ds = D_S if d_s is None else d_s
     e_port = 0.0
+    # exp 68: **청구서.** 선불 적립의 재원은 결국 술자의 손이다. 손이 한 일을 적산한다.
+    e_hand = 0.0
     n_att = 0
     beta_sum = 0.0
     diverged = False
@@ -302,7 +304,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         t = k * DT
         # 항별 분해가 **정확한 분해**로 남으려면(합 = f_coup) 매 스텝 초기화하고, 아래에서
         # 값을 바꾸는 곳(정지 혼합·PC)마다 항별로 같이 걸어야 한다.
-        f_hold = f_pc_applied = 0.0
+        f_hold = f_pc_applied = f_pre = 0.0
         # 환자 움직임: 조직 표면이 움직인다. 상대 침투가 xs − surf − X_SURFACE 가 되므로, 도구를
         # 붙들고 있으면 표면이 다가오는 만큼 그대로 더 박힌다.
         surf = breath_mm * 1e-3 * np.sin(2 * np.pi * breath_hz * t) if breath_mm else 0.0
@@ -403,6 +405,13 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 else:
                     tank = min(tank - p_dr * DT, tank_max)
             f_coup = f_wave_s + f_drift
+            if prepay_d and abs(f_e) < 1e-3 and (prepay_stop is None or e_ctrl > -prepay_stop):
+                # exp 68: **선불.** 수동성은 E_ctrl(t) ≤ 0 이라 미리 음수로 쌓아 두면 나중에
+                # 쓸 수 있다. 그런데 exp 68 이 먼저 확인한 것은 **쌓이는 게 없다**는 사실이다
+                # (자연 최솟값 −0.017 mJ). 그래서 자유공간 구간에 감쇠를 **일부러** 걸어
+                # 적립한다. 공짜가 아니다 — 재원은 결국 술자의 손이 하는 일이다.
+                f_pre = -prepay_d * vs
+                f_coup += f_pre
             if drift_mode == "po":
                 # **전체 포트 PO/PC.** 탱크가 한 항만 손보는 것과 달리, 장부(e_ctrl)를 그대로
                 # 감시하다가 양수가 되면 팔 쪽에 가변 감쇠를 걸어 초과분을 그 스텝에 뽑아낸다.
@@ -512,7 +521,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                 f_wave_s *= wgt
                 f_drift *= wgt
                 f_pc_applied *= wgt
-                f_coup = f_wave_s + f_drift + f_pc_applied + f_hold
+                f_pre *= wgt
+                f_coup = f_wave_s + f_drift + f_pc_applied + f_pre + f_hold
                 n_held += 1
             elif resume_win > 0:
                 # 램프 길이와 무관하게 **해제 직후 같은 창**에서 최대 속도를 본다. 램프 구간만
@@ -587,6 +597,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         # 제어기가 두 기계 몸체에 **해 준 일**의 누적. 내부 전원이 없는(수동) 제어기라면 초기
         # 저장량을 넘어 공급할 수 없으므로 이 값이 위로 유계여야 한다. 자라면 **에너지를 만든 것**이다.
         p_ctrl = (f_m_ch + f_vf + f_ml) * vm + (f_coup + f_loc) * vs
+        e_hand += f_h * vm * DT
         e_ctrl += p_ctrl * DT
         e_ctrl_max = max(e_ctrl_max, e_ctrl)
         # exp 66: 같은 전력을 **항별로** 나눠 적는다. 합은 위의 p_ctrl 과 정확히 같아야 한다
@@ -598,6 +609,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         e_term["drift"] += f_drift * vs * DT
         e_term["hold"] += f_hold * vs * DT       # exp 58 의 정지
         e_term["pc"] += f_pc_applied * vs * DT   # exp 66 의 PO/PC
+        e_term["pre"] += f_pre * vs * DT         # exp 68 의 선불 적립
         e_term["loc"] += f_loc * vs * DT
         # f_loc 은 항상 소산(-D_S·vs)이라 위 합계를 **관대하게** 만든다 — exp 50 의 시스템 장부가
         # 위반을 못 본 것과 같은 이유(R17). 그 항을 뺀 장부도 같이 둬서 둘을 비교한다.
@@ -614,6 +626,9 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         log["t"].append(t); log["xm"].append(xm); log["xs"].append(xs)
         log["fe"].append(f_e); log["fm"].append(f_m_ch)
         log["e_ch"].append(e_ch); log["e_sys"].append(e_sys); log["beta"].append(beta)
+        # exp 68: 두 포트 장부의 **궤적**. 수동성은 max ≤ 0 이라 최댓값만 봐 왔는데, 미리
+        # 음수로 쌓아 두고 나중에 쓰는 설계를 물으려면 **언제 얼마나 음수인지**가 필요하다.
+        log["e_ctrl"].append(e_ctrl)
         # 이번 스텝에 **새 표본이 없었나**. 굶은 구간에 도구가 얼마나 움직였는지(= 모르는 채로 간
         # 거리)를 뒤에서 재려고 남긴다 — exp 57 이 연집 손실의 안전 비용을 여기서 뽑는다.
         log["starved"].append(0.0 if (fresh_u and fresh_w) else 1.0)
@@ -644,6 +659,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                tank_min=tank_min, tank_dry_frac=n_tank_dry / max(steps, 1),
                e_pc=e_pc, pc_duty=n_pc / max(steps, 1),
                e_port=e_port,                                  # exp 67
+               e_hand=e_hand,                                  # exp 68
                drag_held_mm=drag_held * 1e3,
                drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,
