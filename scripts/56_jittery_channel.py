@@ -183,7 +183,8 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
         tissue_obj=None, op_react_ms=0.0, op_lag_mm=3.0,
         op_force_N=0.0, op_learn=0.0, op_reverse_mm=0.0,
         drift_mode="raw", tank_max=TANK_MAX, po_strict=False, pc_fmax=PC_FMAX,
-        port_mode="legacy", d_s=None, prepay_d=0.0, prepay_stop=None):
+        port_mode="legacy", d_s=None, prepay_d=0.0, prepay_stop=None,
+        k_op=None):
     """한 조건 시뮬레이션. exp 56·57·58·59 가 공유하는 1-DOF 원격조작 시뮬레이터다.
 
     mode:
@@ -273,6 +274,10 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
     # exp 67: 팔 쪽 결합 이득. 파동 임피던스 b 와 같은 자릿수여야 포트가 닫히는지
     # 보려고 실행 인자로 뺐다(기본은 지금까지 쓰던 D_S 그대로).
     ds = D_S if d_s is None else d_s
+    # exp 69: 술자의 손 강성. 정상상태에서 마스터는 반력에 밀려 f_m/K_OP 만큼 표적에
+    # 못 미치므로, **도달 깊이의 상한을 제어기가 아니라 이 값이 정한다.** 열두 실험이
+    # 완주라 부른 것이 이 한계 아래에 놓인 바를 넘은 것이라, 실행 인자로 뺐다.
+    kop = K_OP if k_op is None else k_op
     e_port = 0.0
     # exp 68: **청구서.** 선불 적립의 재원은 결국 술자의 손이다. 손이 한 일을 적산한다.
     e_hand = 0.0
@@ -581,7 +586,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             t_op += op_rate * DT                          # 얼어 있으면 과제가 진행되지 않는다
             if op_learn > 0.0:
                 op_rate = min(op_rate + OP_RATE_UP * DT, 1.0)   # 아무 일 없으면 천천히 회복
-        f_h = K_OP * (tgt - xm) - D_OP * vm
+        f_h = kop * (tgt - xm) - D_OP * vm
 
         # ---- 정지 중 마스터 제동 (exp 59) ----
         # 팔만 멈추면 술자는 계속 움직이고 그 어긋남이 복귀 돌진이 된다. 제동도 **국소**로 한다 —
@@ -639,6 +644,10 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
             break
 
     arr = {kk: np.array(v) for kk, v in log.items()}
+    # exp 69: **최고 침투 깊이.** 사슬은 깊이를 최종값으로만 재 왔는데, 그러면 표적을
+    # 지나쳤다가 되돌아온 실행이 기준선과 구분되지 않는다(정상상태에서 둘 다 50.77 mm).
+    # 조직에 무엇을 했는가는 **어디서 끝났는가**가 아니라 **어디까지 갔는가**의 문제다.
+    peak_depth = float(np.max(arr['xs'])) * 1e3 if len(arr['xs']) else float('nan')
     n = len(arr["t"])
     starved = ch_ms.n_starved + ch_sm.n_starved
     res = dict(mode=mode, diverged=diverged, log=arr, jitter_ms=jitter_ms, loss=loss,
@@ -660,6 +669,7 @@ def run(mode="zoh", seed=0, jitter_ms=0.0, loss=0.0, delay_ms=DELAY_MS,
                e_pc=e_pc, pc_duty=n_pc / max(steps, 1),
                e_port=e_port,                                  # exp 67
                e_hand=e_hand,                                  # exp 68
+               peak_depth_mm=peak_depth,                       # exp 69
                drag_held_mm=drag_held * 1e3,
                drag_total_mm=getattr(tissue, "drag", 0.0) * 1e3,
                mismatch_release_mm=mismatch_release * 1e3,

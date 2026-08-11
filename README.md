@@ -32,30 +32,30 @@ verification point catches the failures the covariance misses (`guided_demo.html
 A robot localizes from noisy landmark ranges as a particle cloud spreads over the whole map and re-converges
 after you "kidnap" it — showing why a nonparametric filter beats a single Gaussian (`mcl_demo.html`, no libraries).
 
-✅ **Just want the transferable part?** → **[CHECKLIST.md](CHECKLIST.md)** — the twenty-two questions these
-68 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
+✅ **Just want the transferable part?** → **[CHECKLIST.md](CHECKLIST.md)** — the twenty-three questions these
+69 experiments actually cost me, lifted out of robotics into a one-page validation checklist you can run
 against a regression suite, a benchmark, or a measurement plan. Each item carries the concrete failure that
 produced it, including **the two rules I wrote down and then broke myself**. Start here if you have five minutes.
 
-🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 68 experiments as an
+🧭 **New to robotics?** [LEARNING_PATH.md](LEARNING_PATH.md) re-orders these 69 experiments as an
 8-stage study guide (Korean): what question each stage answers, what to run, what to look for, and the
 mistakes beginners hit — no derivations required.
 
 🛡️ **Safety engineering view:** [VERIFICATION.md](VERIFICATION.md) applies medical-device practice to
-the image-guided chain — 33 verifiable requirements, 43 hazards with mitigations traced to the tests that
+the image-guided chain — 34 verifiable requirements, 44 hazards with mitigations traced to the tests that
 evidence them, and an explicit residual-risk statement. (An engineering exercise, not a regulatory
 submission.)
 
 🎯 **What is this for, and how is it different?** → [WHAT_THIS_IS_FOR.md](WHAT_THIS_IS_FOR.md)
 (what the chain is good for, how it differs from the usual portfolio / paper code / product code,
-the twelve negatives, and the honest limits).
+the thirteen negatives, and the honest limits).
 
 📓 **Write-ups:** a 7-part blog series (incl. an EKF-SLAM debugging journey & the synthetic→real crossing) —
 see [blog/00_index.md](blog/00_index.md).
 
 ## Results at a glance
 
-68 experiments, from scratch (numpy; torch only for the learned front-end), each verified
+69 experiments, from scratch (numpy; torch only for the learned front-end), each verified
 by a test. The arc: **classical filters → nonlinear → SLAM → graph back-ends → real
 benchmarks → learning & systems integration → planning/control → new front-ends & a
 medical application → full LiDAR SLAM & mapping → MPC & obstacle avoidance → wearable gait
@@ -72,7 +72,7 @@ observation honest, since measuring the tissue also moves it → and closing the
 chain, where the answer turned out not to be the sensor → removing the last thing every
 one of those experiments was given for free: the correspondences themselves → and lifting the
 teleoperation channel's constant-delay assumption, where the proof held and it turned out never to have
-covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not → and then building the design that experiment declined to propose, where the guarantee did come back but **not from the term nine experiments had named** — turning that term fully off leaves the injection and loses the task → and finally asking where the leftover injection actually comes from, which turned out not to be a defect at all: **it is what penetrating tissue costs, and sixteen experiments had been reading a price tag as a fault** → and then moving the one axis that had been frozen since #50, which produced both a correction to that grid and something worse: **a configuration that passes every check the chain owns while overshooting the target, because the completion bar was written as a floor.**
+covered the part doing the work → and putting a heavy tail and bursty loss on that same channel, where the prediction that it would break was wrong and the reason was more useful than the prediction → and then designing the stop that finding showed was missing, because the bound protecting the patient turned out to be an accident of this plant → and asking whether stopping is even a safe state, which turned out to need a better model before a better controller → and then, before going out to measure the tissue parameter that answer hinged on, computing whether that measurement would change any decision — it would not, and the same product that makes the parameter unmeasurable is what makes it harmless → and then putting back the one physics that analysis said it was missing, which broke neither prediction I made about it but did reveal that the metric the analysis ran on was measuring the controller, not the patient → and finally giving the surgeon the force the chain had been transmitting to them for twelve experiments without their being able to feel it → and finally opening the one axis the chain's own checks could not reach, where every harm number it had ever produced turned out to be a force → and closing the oldest open item in the chain by discovering it had been left open by an overstated sentence rather than by a number → and finally measuring the sentence every one of those experiments had written and none had tested: whether the controller as a whole is passive. It is not → and then building the design that experiment declined to propose, where the guarantee did come back but **not from the term nine experiments had named** — turning that term fully off leaves the injection and loses the task → and finally asking where the leftover injection actually comes from, which turned out not to be a defect at all: **it is what penetrating tissue costs, and sixteen experiments had been reading a price tag as a fault** → and then moving the one axis that had been frozen since #50, which produced both a correction to that grid and something worse: **a configuration that passes every check the chain owns while overshooting the target, because the completion bar was written as a floor** → and finally replacing that bar with a window taken from a tolerance the repository had declared and never used, which showed that **this chain has never once arrived at its target, and that the force it worked twelve experiments to transmit is what holds the tool short.**
 
 | # | experiment | headline result |
 |---|------------|-----------------|
@@ -142,6 +142,7 @@ covered the part doing the work → and putting a heavy tail and bursty loss on 
 | 66 | **restoring the guarantee** (the design #65 declined to propose) | it comes back — but **not by fixing the term nine experiments named**. An honestly funded energy tank on the drift term reaches passivity at **no capacity**, and turning that term fully **off** still leaves **16 mJ** while the tool stalls at 36.2 mm. Watching the two-port ledger *directly* holds **E_ctrl ≤ 0 on every seed and every time** and still finishes (49.0 mm, above R18). The price is **chatter, 0.16 → 1.76 mm** — and paired at equal depth the harm gain **disappears**: what was bought is the guarantee, not safety margin |
 | 67 | **the leak is the task** (#66's deferred item) | #66 forecast a **wave-transform rewrite**; it was a **gain 6× the wave impedance** (60 vs 10). Match them and the drift-free controller is *exactly* passive — at 27.3 mm. Moving **both** gains over a 42-cell grid, **no cell is both passive and finishing**: every finishing cell costs ≥ 50.8 mJ and ρ(depth, injection) = **0.92**. So #66's observer was not a good point on the curve but a point **off** it — costing more than #66 counted (position error 2.0 → **10.0 mm**) |
 | 68 | **the axis nobody moved** (#67's grid was a slice) | the wave impedance had sat at #50's value for **eighteen experiments**. Move it and **five passive-and-finishing cells appear** — at 48× that value. But the cell drives the tool to **59.1 mm against a 55 mm target**, and **R18 is a floor**, so it **passes every check the chain owns while overshooting**. It also sells force transparency (7×), triples the operator's work, and **collapses to 6/12 violating** in the worst condition |
+| 69 | **the bar was fitted to the surgeon** (#68's rule, built) | scored against a window sourced from **#45's declared-and-never-used 3 mm tolerance**, **no operating point this chain has ever used arrives** — the baseline is 4.23 mm short, forever (identical at 8/16/32 s). Gains saturate; **3.50 of the 4.23 mm is `\|f_m\|/K_OP`** — the force #50 transmitted and #62 let the surgeon feel is what holds the tool short. And a second defect: depth is scored as a **final value**, so a run that punches **6.05 mm past the target** and returns reads as normal |
 
 ## Experiments
 
@@ -2507,6 +2508,10 @@ times #50's value. On the `b` = 10 face there are none, exactly as #67 reported.
 window** — so this configuration **passes every check the chain owns while overshooting the target
 by 4 mm**. Eighteen experiments have been measuring with a ruler that cannot see overshoot.
 
+(**#69 corrects the reason**: run to steady state this cell comes *back* to 50.94 mm. The tool does go
+6.05 mm past the target and return — but the overshoot #68 read here was the 4-second run's final
+value, not the excursion. The defect is that a final-value metric cannot see the excursion at all.)
+
 | | E_ctrl (12 seeds) | depth | vs target | chatter | force error | operator work |
 |---|--:|--:|--:|--:|--:|--:|
 | chain | 80.65 mJ (12/12 violate) | 50.77 | −4.23 | 0.12 mm | 0.37 N | 34.7 mJ |
@@ -2533,6 +2538,79 @@ replaces the other.
   *"this prepay eats itself"*, not *"prepaying is impossible"*.
 
 ![the axis nobody moved](assets/68_the_axis_nobody_moved.png)
+
+### 69. The bar was fitted to the surgeon (`scripts/69_the_bar_was_fitted_to_the_surgeon.py`)
+#68 found that R18's completion bar is a **floor** and wrote the rule down. #57 did the same with the
+brake and it took #58 to build the replacement (CHECKLIST 5-2). This is that replacement — and
+scoring the chain against a target window instead of a floor says something worse than #68 did.
+
+**The window's half-width is not invented.** Following #58's rule that a trigger should come from an
+already-declared criterion, it is `MISS_TOL = 3 mm` from #45 — **a constant this repository declared
+and then never used once**. The chain wrote down a targeting tolerance and spent twelve experiments
+clearing a 45 mm floor instead.
+
+| configuration | depth | vs target (55 mm) | R18 floor | window ±3 mm |
+|---|--:|--:|:--|:--|
+| chain baseline (#56–#67) | 50.77 | **−4.23** | pass | **fail** |
+| #66 observer | 50.77 | −4.23 | pass | **fail** |
+| #67 cheap corner | 50.43 | −4.57 | pass | **fail** |
+| #68 passive cell | 50.94 | −4.06 | pass | **fail** |
+| #68 (480, 60, 48) | 52.16 | −2.84 | pass | pass |
+
+> **Not one operating point this chain has used lands inside the tolerance it declared itself.**
+
+**It is not a time limit.** Run it for 8, 16, 32 s and the depth is *identical* — 50.77 mm — with the
+tool advancing 0.0000 mm in the last half-second. The operator commands the target from t = 4 s
+onward and the tool stands still in front of it forever.
+
+**And it is not the controller.** If it were the drift term's steady-state error it would scale as
+1/(`d_s`·λ); raising the gains **64×** moves it from −4.23 to −3.54 mm. It saturates.
+
+**It is the surgeon.** At steady state the shortfall splits exactly:
+
+| term | mm |
+|---|--:|
+| master never reaches the target | **3.50** |
+|   predicted `\|f_m\|`/`K_OP` | **3.50** ← matches to the decimal |
+| tool never catches the master | 0.73 |
+| **total shortfall** | **4.23** |
+
+The operator model is a finite-stiffness spring, so the reflected force pushes the master back by
+exactly `|f_m|/K_OP`. Sweeping that term — the only one that does not saturate — reaches the window
+at **2× stiffness**. So **#50 transmitted the force through wave variables and #62 let the surgeon
+feel it, and the force they succeeded in transmitting is what holds the tool short of the target.**
+The chain's achievement became the chain's ceiling. And R18's 45 mm bar sits *below* that ceiling:
+what twelve experiments called "task complete" was clearing a bar set to a height the system could
+reach.
+
+**A second defect, independent of the first.** #68 reported its passive cell overshooting; run to
+steady state it comes **back**, and its final depth (50.94) is indistinguishable from the baseline.
+But along the way it drives the tool to **61.05 mm — 6.05 mm past the target — and returns.** The
+chain has always scored depth as a **final value**, so a configuration that punches through the
+target and retreats reads as normal:
+
+| configuration | final | peak | vs target | final-based | peak-based |
+|---|--:|--:|--:|:--|:--|
+| chain baseline | 50.77 | 53.07 | −1.93 | fail | pass |
+| #68 passive cell | 50.94 | **61.05** | **+6.05** | fail | **fail** |
+
+#68's complaint was right and its reason was wrong: the 4-second run's *final* value happened to be
+high. The real defect is that **a final-value metric cannot see an excursion** — what was done to the
+tissue is a question about where the tool *went*, not where it *stopped*. Two defects overlapping is
+why that cell passed every check the chain owns.
+
+- Honest limits. **3 mm is a declared number, not a clinical one** — it sits beside the acceptable
+  latency and the force/blind-travel exchange rate as a figure that has to come from outside. It is
+  still better than a floor, because a window blocks both directions. **Stiffening the surgeon is not
+  a prescription** — it is an attribution; the real handles are force-display scaling or master-side
+  support, which means reopening #62's operator model. The window scores **axial depth only** — #45's
+  6-DOF miss and #63's drag axis remain separate. And one process note: the first version of the
+  stiffness control **silently did nothing** (it patched a constant the simulator had already copied
+  at import), producing five identical rows that would have read as *"operator stiffness is
+  irrelevant"* — the exact opposite conclusion. The knob is now a run argument and a test pins that
+  it actually binds.
+
+![the bar was fitted to the surgeon](assets/69_the_bar_was_fitted_to_the_surgeon.png)
 
 ## Why this bridges to robotics (and my background)
 - **DSP → estimation**: the KF is optimal linear filtering — the same innovation /
